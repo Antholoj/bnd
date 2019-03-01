@@ -1,17 +1,44 @@
 package aQute.libg.sed;
 
-import java.io.*;
-import java.lang.reflect.*;
-import java.net.*;
-import java.text.*;
-import java.util.*;
-import java.util.regex.*;
+import static java.lang.invoke.MethodHandles.publicLookup;
+import static java.nio.charset.StandardCharsets.UTF_8;
+import static java.util.stream.Collectors.joining;
 
-import aQute.lib.collections.*;
-import aQute.lib.io.*;
-import aQute.libg.glob.*;
-import aQute.libg.reporter.*;
-import aQute.service.reporter.*;
+import java.io.File;
+import java.io.IOException;
+import java.lang.invoke.MethodHandle;
+import java.lang.invoke.WrongMethodTypeException;
+import java.lang.reflect.Field;
+import java.lang.reflect.Method;
+import java.lang.reflect.Modifier;
+import java.net.MalformedURLException;
+import java.net.URL;
+import java.text.SimpleDateFormat;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collection;
+import java.util.Collections;
+import java.util.Comparator;
+import java.util.Date;
+import java.util.Formatter;
+import java.util.HashMap;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Properties;
+import java.util.Random;
+import java.util.Set;
+import java.util.TimeZone;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
+import aQute.lib.collections.ExtList;
+import aQute.lib.collections.SortedList;
+import aQute.lib.io.IO;
+import aQute.lib.strings.Strings;
+import aQute.libg.glob.Glob;
+import aQute.libg.reporter.ReporterAdapter;
+import aQute.service.reporter.Reporter;
 
 /**
  * Provide a macro Domain. This Domain can replace variables in strings based on
@@ -25,9 +52,9 @@ import aQute.service.reporter.*;
  */
 public class ReplacerAdapter extends ReporterAdapter implements Replacer {
 	static final Random	random		= new Random();
-	static Pattern		WILDCARD	= Pattern.compile("[*?|[\\\\]\\(\\)]");
+	static Pattern		WILDCARD	= Pattern.compile("[*?|({\\[]");
 	Domain				domain;
-	List<Object>		targets		= new ArrayList<Object>();
+	List<Object>		targets		= new ArrayList<>();
 	boolean				flattening;
 	File				base		= new File(System.getProperty("user.dir"));
 	Reporter			reporter	= this;
@@ -36,17 +63,19 @@ public class ReplacerAdapter extends ReporterAdapter implements Replacer {
 		this.domain = domain;
 	}
 
-	public ReplacerAdapter(final Map<String,String> domain) {
+	public ReplacerAdapter(final Map<String, String> domain) {
 		this(new Domain() {
 
-			public Map<String,String> getMap() {
+			@Override
+			public Map<String, String> getMap() {
 				return domain;
 			}
 
+			@Override
 			public Domain getParent() {
 				return null;
 			}
-			
+
 		});
 	}
 
@@ -115,6 +144,55 @@ public class ReplacerAdapter extends ReporterAdapter implements Replacer {
 		return index;
 	}
 
+	/**
+	 * Traverses a string to find a macro. It can handle nested brackets.
+	 * 
+	 * @param line The line with the macro
+	 * @param index Points to the character after the '$'
+	 * @return the end position
+	 */
+	public int findMacro(CharSequence line, int index) {
+		if (index >= line.length() || line.charAt(index) != '$')
+			return -1;
+
+		index++;
+
+		int nesting = 1;
+		char begin = line.charAt(index++);
+		char end = getTerminator(begin);
+		if (end == 0)
+			return -1;
+
+		while (index < line.length()) {
+			char c1 = line.charAt(index++);
+			if (c1 == end) {
+				if (--nesting == 0) {
+					return index;
+				}
+			} else if (c1 == begin)
+				nesting++;
+			else if (c1 == '\\' && index < line.length() - 1) {
+				index++;
+			} else if (c1 == '\'' || c1 == '"') {
+				string: while (index < line.length()) {
+					char c2 = line.charAt(index++);
+					switch (c2) {
+						case '"' :
+						case '\'' :
+							if (c2 == c1)
+								break string;
+							break;
+
+						case '\\' :
+							index++;
+							break;
+					}
+				}
+			}
+		}
+		return index;
+	}
+
 	public static char getTerminator(char c) {
 		switch (c) {
 			case '(' :
@@ -139,7 +217,7 @@ public class ReplacerAdapter extends ReporterAdapter implements Replacer {
 
 	protected String replace(String key, Link link) {
 		if (link != null && link.contains(key))
-			return "${infinite:" + link.toString() + "}";
+			return "${infinite:" + link + "}";
 
 		if (key != null) {
 			key = key.trim();
@@ -147,12 +225,14 @@ public class ReplacerAdapter extends ReporterAdapter implements Replacer {
 				Domain source = domain;
 				String value = null;
 				if (key.indexOf(';') < 0) {
-					if (WILDCARD.matcher(key).find()) {
+					if (WILDCARD.matcher(key)
+						.find()) {
 						Glob ins = new Glob(key);
 						StringBuilder sb = new StringBuilder();
 						String del = "";
 						for (String k : getAllKeys()) {
-							if (ins.matcher(k).find()) {
+							if (ins.matcher(k)
+								.find()) {
 								String v = replace(k, new Link(source, link, key));
 								if (v != null) {
 									sb.append(del);
@@ -165,7 +245,8 @@ public class ReplacerAdapter extends ReporterAdapter implements Replacer {
 					}
 
 					while (value == null && source != null) {
-						value = source.getMap().get(key);
+						value = source.getMap()
+							.get(key);
 						if (value != null)
 							return process(value, new Link(source, link, key));
 
@@ -176,13 +257,56 @@ public class ReplacerAdapter extends ReporterAdapter implements Replacer {
 				if (value != null)
 					return process(value, new Link(source, link, key));
 
-				if (key != null && key.trim().length() > 0) {
+				if (key != null && key.trim()
+					.length() > 0) {
 					value = System.getProperty(key);
 					if (value != null)
 						return value;
 				}
+				if (key.indexOf(';') >= 0) {
+					String parts[] = key.split(";");
+					if (parts.length > 1) {
+						if (parts.length >= 16) {
+							error("too many arguments for template: %s, max is 16", key);
+						}
+
+						String template = domain.getMap()
+							.get(parts[0]);
+						if (template != null) {
+							final Domain old = domain;
+							try {
+								final Map<String, String> args = new HashMap<>();
+								for (int i = 0; i < 16; i++) {
+									args.put("" + i, i < parts.length ? parts[i] : "null");
+								}
+								domain = new Domain() {
+
+									@Override
+									public Map<String, String> getMap() {
+										return args;
+									}
+
+									@Override
+									public Domain getParent() {
+										return old;
+									}
+
+								};
+								ExtList<String> args0 = new ExtList<>(parts);
+								args0.remove(0);
+								args.put("#", args0.join());
+
+								value = process(template, new Link(domain, link, key));
+								if (value != null)
+									return value;
+							} finally {
+								domain = old;
+							}
+						}
+					}
+				}
 				if (!flattening && !key.equals("@"))
-					reporter.warning("No translation found for macro: " + key);
+					reporter.warning("No translation found for macro: %s", key);
 			} else {
 				reporter.warning("Found empty macro key");
 			}
@@ -193,10 +317,11 @@ public class ReplacerAdapter extends ReporterAdapter implements Replacer {
 	}
 
 	private List<String> getAllKeys() {
-		List<String> l = new ArrayList<String>();
+		List<String> l = new ArrayList<>();
 		Domain source = domain;
 		do {
-			l.addAll(source.getMap().keySet());
+			l.addAll(source.getMap()
+				.keySet());
 			source = source.getParent();
 		} while (source != null);
 
@@ -207,11 +332,8 @@ public class ReplacerAdapter extends ReporterAdapter implements Replacer {
 	/**
 	 * Parse the key as a command. A command consist of parameters separated by
 	 * ':'.
-	 * 
-	 * @param key
-	 * @return
 	 */
-	static Pattern	commands	= Pattern.compile("(?<!\\\\);");
+	static Pattern commands = Pattern.compile("(?<!\\\\);");
 
 	private String doCommands(String key, Link source) {
 		String[] args = commands.split(key);
@@ -223,11 +345,13 @@ public class ReplacerAdapter extends ReporterAdapter implements Replacer {
 				args[i] = args[i].replaceAll("\\\\;", ";");
 
 		if (args[0].startsWith("^")) {
-			String varname = args[0].substring(1).trim();
+			String varname = args[0].substring(1)
+				.trim();
 
 			Domain parent = source.start.getParent();
 			if (parent != null)
-				return parent.getMap().get(varname);
+				return parent.getMap()
+					.get(varname);
 			return null;
 		}
 
@@ -255,27 +379,33 @@ public class ReplacerAdapter extends ReporterAdapter implements Replacer {
 		// domain);
 		else {
 			String cname = "_" + method.replaceAll("-", "_");
+			Method m;
 			try {
-				Method m = target.getClass().getMethod(cname, new Class[] {
-					String[].class
-				});
-				return (String) m.invoke(target, new Object[] {
-					args
-				});
+				m = target.getClass()
+					.getMethod(cname, String[].class);
+			} catch (NoSuchMethodException e) {
+				return null;
 			}
-			catch (NoSuchMethodException e) {
-				// Ignore
+			MethodHandle mh;
+			try {
+				mh = publicLookup().unreflect(m);
+			} catch (Exception e) {
+				reporter.warning("Exception in replace: %s method=%s", e, method);
+				e.printStackTrace();
+				return null;
 			}
-			catch (InvocationTargetException e) {
-				if (e.getCause() instanceof IllegalArgumentException) {
-					reporter.error("%s, for cmd: %s, arguments; %s", e.getCause().getMessage(), method, Arrays.toString(args));
-				} else {
-					reporter.warning("Exception in replace: " + e.getCause());
-					e.getCause().printStackTrace();
-				}
-			}
-			catch (Exception e) {
-				reporter.warning("Exception in replace: " + e + " method=" + method);
+			try {
+				Object result = Modifier.isStatic(m.getModifiers()) ? mh.invoke(args) : mh.invoke(target, args);
+				return "" + result;
+			} catch (Error e) {
+				throw e;
+			} catch (WrongMethodTypeException e) {
+				reporter.warning("Exception in replace: %s method=%s", e, method);
+				e.printStackTrace();
+			} catch (IllegalArgumentException e) {
+				reporter.error("%s, for cmd: %s, arguments; %s", e, method, Arrays.toString(args));
+			} catch (Throwable e) {
+				reporter.warning("Exception in replace: %s method=%s", e, method);
 				e.printStackTrace();
 			}
 		}
@@ -284,19 +414,16 @@ public class ReplacerAdapter extends ReporterAdapter implements Replacer {
 
 	/**
 	 * Return a unique list where the duplicates are removed.
-	 * 
-	 * @param args
-	 * @return
 	 */
-	static String	_uniqHelp	= "${uniq;<list> ...}";
+	static String _uniqHelp = "${uniq;<list> ...}";
 
 	public String _uniq(String args[]) {
 		verifyCommand(args, _uniqHelp, null, 1, Integer.MAX_VALUE);
-		Set<String> set = new LinkedHashSet<String>();
+		Set<String> set = new LinkedHashSet<>();
 		for (int i = 1; i < args.length; i++) {
 			set.addAll(ExtList.from(args[i].trim()));
 		}
-		ExtList<String> rsult = new ExtList<String>();
+		ExtList<String> rsult = new ExtList<>();
 		rsult.addAll(set);
 		return rsult.join(",");
 	}
@@ -318,7 +445,7 @@ public class ReplacerAdapter extends ReporterAdapter implements Replacer {
 
 	}
 
-	static String	_filterHelp	= "${%s;<list>;<regex>}";
+	static String _filterHelp = "${%s;<list>;<regex>}";
 
 	String filter(String[] args, boolean include) {
 		verifyCommand(args, String.format(_filterHelp, args[0]), null, 3, 3);
@@ -326,19 +453,17 @@ public class ReplacerAdapter extends ReporterAdapter implements Replacer {
 		ExtList<String> list = ExtList.from(args[1]);
 		Pattern pattern = Pattern.compile(args[2]);
 
-		for (Iterator<String> i = list.iterator(); i.hasNext();) {
-			if (pattern.matcher(i.next()).matches() == include)
-				i.remove();
-		}
+		list.removeIf(s -> pattern.matcher(s)
+			.matches() == include);
 		return list.join();
 	}
 
-	static String	_sortHelp	= "${sort;<list>...}";
+	static String _sortHelp = "${sort;<list>...}";
 
 	public String _sort(String args[]) {
 		verifyCommand(args, _sortHelp, null, 2, Integer.MAX_VALUE);
 
-		ExtList<String> result = new ExtList<String>();
+		ExtList<String> result = new ExtList<>();
 		for (int i = 1; i < args.length; i++) {
 			result.addAll(ExtList.from(args[i]));
 		}
@@ -346,20 +471,51 @@ public class ReplacerAdapter extends ReporterAdapter implements Replacer {
 		return result.join();
 	}
 
-	static String	_joinHelp	= "${join;<list>...}";
+	static String _nsortHelp = "${nsort;<list>...}";
+
+	public String _nsort(String args[]) {
+		verifyCommand(args, _nsortHelp, null, 2, Integer.MAX_VALUE);
+
+		ExtList<String> result = new ExtList<>();
+		for (int i = 1; i < args.length; i++) {
+			result.addAll(ExtList.from(args[i]));
+		}
+		Collections.sort(result, new Comparator<String>() {
+
+			@Override
+			public int compare(String a, String b) {
+				while (a.startsWith("0"))
+					a = a.substring(1);
+
+				while (b.startsWith("0"))
+					b = b.substring(1);
+
+				if (a.length() == b.length())
+					return a.compareTo(b);
+				else if (a.length() > b.length())
+					return 1;
+				else
+					return -1;
+
+			}
+		});
+		return result.join();
+	}
+
+	static String _joinHelp = "${join;<list>...}";
 
 	public String _join(String args[]) {
 
 		verifyCommand(args, _joinHelp, null, 1, Integer.MAX_VALUE);
 
-		ExtList<String> result = new ExtList<String>();
+		ExtList<String> result = new ExtList<>();
 		for (int i = 1; i < args.length; i++) {
 			result.addAll(ExtList.from(args[i]));
 		}
 		return result.join();
 	}
 
-	static String	_ifHelp	= "${if;<condition>;<iftrue> [;<iffalse>] }";
+	static String _ifHelp = "${if;<condition>;<iftrue> [;<iffalse>] }";
 
 	public String _if(String args[]) {
 		verifyCommand(args, _ifHelp, null, 3, 4);
@@ -377,13 +533,13 @@ public class ReplacerAdapter extends ReporterAdapter implements Replacer {
 		return new Date().toString();
 	}
 
-	public final static String	_fmodifiedHelp	= "${fmodified;<list of filenames>...}, return latest modification date";
+	public final static String _fmodifiedHelp = "${fmodified;<list of filenames>...}, return latest modification date";
 
 	public String _fmodified(String args[]) throws Exception {
 		verifyCommand(args, _fmodifiedHelp, null, 2, Integer.MAX_VALUE);
 
 		long time = 0;
-		Collection<String> names = new ExtList<String>();
+		Collection<String> names = new ExtList<>();
 		for (int i = 1; i < args.length; i++) {
 			names.addAll(ExtList.from(args[i]));
 		}
@@ -398,8 +554,7 @@ public class ReplacerAdapter extends ReporterAdapter implements Replacer {
 	public String _long2date(String args[]) {
 		try {
 			return new Date(Long.parseLong(args[1])).toString();
-		}
-		catch (Exception e) {
+		} catch (Exception e) {
 			e.printStackTrace();
 		}
 		return "not a valid long";
@@ -415,7 +570,8 @@ public class ReplacerAdapter extends ReporterAdapter implements Replacer {
 		if (args.length != 2)
 			throw new RuntimeException("Need a value for the ${def;<value>} macro");
 
-		String value = domain.getMap().get(args[1]);
+		String value = domain.getMap()
+			.get(args[1]);
 		if (value == null)
 			return "";
 
@@ -426,62 +582,56 @@ public class ReplacerAdapter extends ReporterAdapter implements Replacer {
 	 * replace ; <list> ; regex ; replace
 	 * 
 	 * @param args
-	 * @return
+	 * @return result
 	 */
 	public String _replace(String args[]) {
 		if (args.length != 4) {
-			reporter.warning("Invalid nr of arguments to replace " + Arrays.asList(args));
+			reporter.warning("Invalid nr of arguments to replace %s", Arrays.asList(args));
 			return null;
 		}
+		Pattern regex = Pattern.compile(args[2]);
+		String replace = (args.length > 3) ? args[3] : "";
+		String middle = (args.length > 4) ? args[4] : ",";
 
-		String list[] = args[1].split("\\s*,\\s*");
-		StringBuilder sb = new StringBuilder();
-		String del = "";
-		for (int i = 0; i < list.length; i++) {
-			String element = list[i].trim();
-			if (!element.equals("")) {
-				sb.append(del);
-				sb.append(element.replaceAll(args[2], args[3]));
-				del = ", ";
-			}
-		}
-
-		return sb.toString();
+		String result = Strings.splitAsStream(args[1])
+			.map(element -> regex.matcher(element)
+				.replaceAll(replace))
+			.collect(joining(middle));
+		return result;
 	}
 
 	public String _warning(String args[]) {
 		for (int i = 1; i < args.length; i++) {
-			reporter.warning(process(args[i]));
+			reporter.warning("%s", process(args[i]));
 		}
 		return "";
 	}
 
 	public String _error(String args[]) {
 		for (int i = 1; i < args.length; i++) {
-			reporter.error(process(args[i]));
+			reporter.error("%s", process(args[i]));
 		}
 		return "";
 	}
 
 	/**
 	 * toclassname ; <path>.class ( , <path>.class ) *
-	 * 
-	 * @param args
-	 * @return
 	 */
-	static String	_toclassnameHelp	= "${classname;<list of class names>}, convert class paths to FQN class names ";
+	static String _toclassnameHelp = "${classname;<list of class names>}, convert class paths to FQN class names ";
 
 	public String _toclassname(String args[]) {
 		verifyCommand(args, _toclassnameHelp, null, 2, 2);
 		Collection<String> paths = ExtList.from(args[1]);
 
-		ExtList<String> names = new ExtList<String>(paths.size());
+		ExtList<String> names = new ExtList<>(paths.size());
 		for (String path : paths) {
 			if (path.endsWith(".class")) {
-				String name = path.substring(0, path.length() - 6).replace('/', '.');
+				String name = path.substring(0, path.length() - 6)
+					.replace('/', '.');
 				names.add(name);
 			} else if (path.endsWith(".java")) {
-				String name = path.substring(0, path.length() - 5).replace('/', '.');
+				String name = path.substring(0, path.length() - 5)
+					.replace('/', '.');
 				names.add(name);
 			} else {
 				reporter.warning("in toclassname, %s, is not a class path because it does not end in .class", args[1]);
@@ -492,12 +642,9 @@ public class ReplacerAdapter extends ReporterAdapter implements Replacer {
 
 	/**
 	 * toclassname ; <path>.class ( , <path>.class ) *
-	 * 
-	 * @param args
-	 * @return
 	 */
 
-	static String	_toclasspathHelp	= "${toclasspath;<list>[;boolean]}, convert a list of class names to paths";
+	static String _toclasspathHelp = "${toclasspath;<list>[;boolean]}, convert a list of class names to paths";
 
 	public String _toclasspath(String args[]) {
 		verifyCommand(args, _toclasspathHelp, null, 2, 3);
@@ -506,7 +653,7 @@ public class ReplacerAdapter extends ReporterAdapter implements Replacer {
 			cl = Boolean.valueOf(args[2]);
 
 		ExtList<String> names = ExtList.from(args[1]);
-		ExtList<String> paths = new ExtList<String>(names.size());
+		ExtList<String> paths = new ExtList<>(names.size());
 		for (String name : names) {
 			String path = name.replace('.', '/') + (cl ? ".class" : "");
 			paths.add(path);
@@ -523,9 +670,11 @@ public class ReplacerAdapter extends ReporterAdapter implements Replacer {
 		StringBuilder sb = new StringBuilder();
 		for (int i = 1; i < args.length; i++) {
 			File f = IO.getFile(base, args[i]);
-			if (f.exists() && f.getParentFile().exists()) {
+			if (f.exists() && f.getParentFile()
+				.exists()) {
 				sb.append(del);
-				sb.append(f.getParentFile().getAbsolutePath());
+				sb.append(f.getParentFile()
+					.getAbsolutePath());
 				del = ",";
 			}
 		}
@@ -542,7 +691,8 @@ public class ReplacerAdapter extends ReporterAdapter implements Replacer {
 		StringBuilder sb = new StringBuilder();
 		for (int i = 1; i < args.length; i++) {
 			File f = IO.getFile(base, args[i]);
-			if (f.exists() && f.getParentFile().exists()) {
+			if (f.exists() && f.getParentFile()
+				.exists()) {
 				sb.append(del);
 				sb.append(f.getName());
 				del = ",";
@@ -581,33 +731,38 @@ public class ReplacerAdapter extends ReporterAdapter implements Replacer {
 	}
 
 	public String _tstamp(String args[]) {
-		String format = "yyyyMMddHHmm";
-		long now = System.currentTimeMillis();
-		TimeZone tz = TimeZone.getTimeZone("UTC");
+		String format;
+		long now;
+		TimeZone tz;
 
 		if (args.length > 1) {
 			format = args[1];
+		} else {
+			format = "yyyyMMddHHmm";
 		}
 		if (args.length > 2) {
 			tz = TimeZone.getTimeZone(args[2]);
+		} else {
+			tz = TimeZone.getTimeZone("UTC");
 		}
 		if (args.length > 3) {
 			now = Long.parseLong(args[3]);
+		} else {
+			now = System.currentTimeMillis();
 		}
 		if (args.length > 4) {
-			reporter.warning("Too many arguments for tstamp: " + Arrays.toString(args));
+			reporter.warning("Too many arguments for tstamp: %s", Arrays.toString(args));
 		}
 
 		SimpleDateFormat sdf = new SimpleDateFormat(format);
 		sdf.setTimeZone(tz);
-
 		return sdf.format(new Date(now));
 	}
 
 	/**
 	 * Wildcard a directory. The lists can contain Instruction that are matched
-	 * against the given directory ${lsr;<dir>;<list>(;<list>)*}
-	 * ${lsa;<dir>;<list>(;<list>)*}
+	 * against the given directory ${lsr;<dir>;<list>(;<list>)*} ${lsa;<dir>;
+	 * <list>(;<list>)*}
 	 * 
 	 * @author aqute
 	 */
@@ -633,18 +788,19 @@ public class ReplacerAdapter extends ReporterAdapter implements Replacer {
 
 		if (!dir.isDirectory())
 			throw new IllegalArgumentException(
-					"the ${ls} macro directory parameter points to a file instead of a directory: " + dir);
+				"the ${ls} macro directory parameter points to a file instead of a directory: " + dir);
 
-		List<File> files = new ArrayList<File>(new SortedList<File>(dir.listFiles()));
+		List<File> files = new ArrayList<>(new SortedList<>(dir.listFiles()));
 
 		for (int i = 2; i < args.length; i++) {
 			Glob filters = new Glob(args[i]);
 			filters.select(files);
 		}
 
-		ExtList<String> result = new ExtList<String>();
+		ExtList<String> result = new ExtList<>();
 		for (File file : files)
-			result.add(relative ? file.getName() : file.getAbsolutePath());
+			result.add(relative ? file.getName()
+				: IO.absolutePath(file));
 
 		return result.join(",");
 	}
@@ -655,16 +811,11 @@ public class ReplacerAdapter extends ReporterAdapter implements Replacer {
 
 	/**
 	 * System command. Execute a command and insert the result.
-	 * 
-	 * @param args
-	 * @param help
-	 * @param patterns
-	 * @param low
-	 * @param high
 	 */
 	public String system_internal(boolean allowFail, String args[]) throws Exception {
-		verifyCommand(args, "${" + (allowFail ? "system-allow-fail" : "system")
-				+ ";<command>[;<in>]}, execute a system command", null, 2, 3);
+		verifyCommand(args,
+			"${" + (allowFail ? "system-allow-fail" : "system") + ";<command>[;<in>]}, execute a system command", null,
+			2, 3);
 		String command = args[1];
 		String input = null;
 
@@ -672,20 +823,30 @@ public class ReplacerAdapter extends ReporterAdapter implements Replacer {
 			input = args[2];
 		}
 
-		Process process = Runtime.getRuntime().exec(command, null, base);
+		Process process = Runtime.getRuntime()
+			.exec(command, null, base);
 		if (input != null) {
-			process.getOutputStream().write(input.getBytes("UTF-8"));
+			process.getOutputStream()
+				.write(input.getBytes(UTF_8));
 		}
-		process.getOutputStream().close();
+		process.getOutputStream()
+			.close();
 
-		String s = IO.collect(process.getInputStream(), "UTF-8");
+		String s = IO.collect(process.getInputStream(), UTF_8);
+		s += IO.collect(process.getErrorStream(), UTF_8);
 		int exitValue = process.waitFor();
 		if (exitValue != 0)
 			return exitValue + "";
 
-		if (!allowFail && (exitValue != 0)) {
-			reporter.error("System command " + command + " failed with " + exitValue);
+		if (exitValue != 0) {
+			if (!allowFail) {
+				reporter.error("System command %s failed with exit code %d", command, exitValue);
+			} else {
+				reporter.warning("System command %s failed with exit code %d (allowed)", command, exitValue);
+
+			}
 		}
+
 		return s.trim();
 	}
 
@@ -697,8 +858,7 @@ public class ReplacerAdapter extends ReporterAdapter implements Replacer {
 		String result = "";
 		try {
 			result = system_internal(true, args);
-		}
-		catch (Throwable t) {
+		} catch (Throwable t) {
 			/* ignore */
 		}
 		return result;
@@ -709,8 +869,7 @@ public class ReplacerAdapter extends ReporterAdapter implements Replacer {
 
 		try {
 			return System.getenv(args[1]);
-		}
-		catch (Throwable t) {
+		} catch (Throwable t) {
 			return null;
 		}
 	}
@@ -718,8 +877,7 @@ public class ReplacerAdapter extends ReporterAdapter implements Replacer {
 	/**
 	 * Get the contents of a file.
 	 * 
-	 * @param in
-	 * @return
+	 * @return contents of file
 	 * @throws IOException
 	 */
 
@@ -733,9 +891,8 @@ public class ReplacerAdapter extends ReporterAdapter implements Replacer {
 		} else {
 			try {
 				URL url = new URL(args[1]);
-				return IO.collect(url, "UTF-8");
-			}
-			catch (MalformedURLException mfue) {
+				return IO.collect(url, UTF_8);
+			} catch (MalformedURLException mfue) {
 				// Ignore here
 			}
 			return null;
@@ -754,7 +911,7 @@ public class ReplacerAdapter extends ReporterAdapter implements Replacer {
 					Matcher m = patterns[i].matcher(args[i]);
 					if (!m.matches())
 						message += String.format("Argument %s (%s) does not match %s%n", i, args[i],
-								patterns[i].pattern());
+							patterns[i].pattern());
 				}
 			}
 		}
@@ -820,13 +977,13 @@ public class ReplacerAdapter extends ReporterAdapter implements Replacer {
 	 * 
 	 * @return A new Properties with the flattened values
 	 */
-	public Map<String,String> getFlattenedProperties() {
+	public Map<String, String> getFlattenedProperties() {
 		// Some macros only work in a lower Domain, so we
 		// do not report unknown macros while flattening
 		flattening = true;
 		try {
-			Map<String,String> flattened = new HashMap<String,String>();
-			Map<String,String> source = domain.getMap();
+			Map<String, String> flattened = new HashMap<>();
+			Map<String, String> source = domain.getMap();
 			for (String key : source.keySet()) {
 				if (!key.startsWith("_"))
 					if (key.startsWith("-"))
@@ -835,13 +992,12 @@ public class ReplacerAdapter extends ReporterAdapter implements Replacer {
 						flattened.put(key, process(source.get(key)));
 			}
 			return flattened;
-		}
-		finally {
+		} finally {
 			flattening = false;
 		}
 	}
 
-	public final static String	_fileHelp	= "${file;<base>;<paths>...}, create correct OS dependent path";
+	public final static String _fileHelp = "${file;<base>;<paths>...}, create correct OS dependent path";
 
 	public String _osfile(String args[]) {
 		verifyCommand(args, _fileHelp, null, 3, 3);
@@ -851,7 +1007,7 @@ public class ReplacerAdapter extends ReporterAdapter implements Replacer {
 	}
 
 	public String _path(String args[]) {
-		ExtList<String> list = new ExtList<String>();
+		ExtList<String> list = new ExtList<>();
 		for (int i = 1; i < args.length; i++) {
 			list.addAll(ExtList.from(args[i]));
 		}
@@ -863,14 +1019,14 @@ public class ReplacerAdapter extends ReporterAdapter implements Replacer {
 			Field f = Properties.class.getDeclaredField("defaults");
 			f.setAccessible(true);
 			return (Properties) f.get(p);
-		}
-		catch (Exception e) {
+		} catch (Exception e) {
 			Field[] fields = Properties.class.getFields();
 			System.err.println(Arrays.toString(fields));
 			return null;
 		}
 	}
 
+	@Override
 	public String process(String line) {
 		return process(line, domain);
 	}
@@ -886,8 +1042,7 @@ public class ReplacerAdapter extends ReporterAdapter implements Replacer {
 		if (args.length > 1) {
 			try {
 				numchars = Integer.parseInt(args[1]);
-			}
-			catch (NumberFormatException e) {
+			} catch (NumberFormatException e) {
 				throw new IllegalArgumentException("Invalid character count parameter in ${random} macro.");
 			}
 		}
@@ -912,24 +1067,97 @@ public class ReplacerAdapter extends ReporterAdapter implements Replacer {
 		this.reporter = reporter;
 	}
 
-	
 	public int _processors(String args[]) {
 		float multiplier = 1F;
-		if ( args.length > 1 )
+		if (args.length > 1)
 			multiplier = Float.parseFloat(args[1]);
-		
-		return (int) (Runtime.getRuntime().availableProcessors() * multiplier);
+
+		return (int) (Runtime.getRuntime()
+			.availableProcessors() * multiplier);
 	}
-	
+
 	public long _maxMemory(String args[]) {
-		return Runtime.getRuntime().maxMemory();
+		return Runtime.getRuntime()
+			.maxMemory();
 	}
+
 	public long _freeMemory(String args[]) {
-		return Runtime.getRuntime().freeMemory();
+		return Runtime.getRuntime()
+			.freeMemory();
 	}
 
 	public long _nanoTime(String args[]) {
 		return System.nanoTime();
 	}
-	
+
+	public void addTarget(Object target) {
+		targets.remove(target);
+		targets.add(target);
+	}
+
+	public void removeTarget(Object target) {
+		targets.remove(target);
+	}
+
+	public String _unescape(String args[]) {
+		StringBuilder sb = new StringBuilder();
+		for (int i = 1; i < args.length; i++) {
+			sb.append(args[i]);
+		}
+
+		for (int j = 0; j < sb.length() - 1; j++) {
+			if (sb.charAt(j) == '\\') {
+				switch (sb.charAt(j + 1)) {
+
+					case 'n' :
+						sb.replace(j, j + 2, "\n");
+						break;
+
+					case 'r' :
+						sb.replace(j, j + 2, "\r");
+						break;
+
+					case 'b' :
+						sb.replace(j, j + 2, "\b");
+						break;
+
+					case 'f' :
+						sb.replace(j, j + 2, "\f");
+						break;
+
+					case 't' :
+						sb.replace(j, j + 2, "\t");
+						break;
+
+					default :
+						break;
+				}
+			}
+		}
+		return sb.toString();
+	}
+
+	/**
+	 * Format bytes
+	 */
+
+	public String _bytes(String[] args) {
+		Formatter sb = new Formatter();
+		for (int i = 0; i < args.length; i++) {
+			long l = Long.parseLong(args[1]);
+			bytes(sb, l, 0, new String[] {
+				"b", "Kb", "Mb", "Gb", "Tb", "Pb", "Eb", "Zb", "Yb", "Bb", "Geopbyte"
+			});
+		}
+		return sb.toString();
+	}
+
+	private void bytes(Formatter sb, double l, int i, String[] strings) {
+		if (l > 1024 && i < strings.length - 1) {
+			bytes(sb, l / 1024, i + 1, strings);
+			return;
+		}
+		l = Math.round(l * 10) / 10;
+		sb.format("%s %s", l, strings[i]);
+	}
 }

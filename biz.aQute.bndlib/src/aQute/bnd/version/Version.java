@@ -1,20 +1,25 @@
 package aQute.bnd.version;
 
-import java.util.regex.*;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 public class Version implements Comparable<Version> {
+	private static final String	HIGHESTCHAR		= "\uFFFF";
 	final int					major;
 	final int					minor;
 	final int					micro;
 	final String				qualifier;
-	public final static String	VERSION_STRING	= "(\\d{1,9})(\\.(\\d{1,9})(\\.(\\d{1,9})(\\.([-_\\da-zA-Z]+))?)?)?";
+	final boolean				snapshot;
+
+	public final static String	VERSION_STRING	= "(\\d{1,10})(\\.(\\d{1,10})(\\.(\\d{1,10})(\\.([-_\\da-zA-Z]+))?)?)?";
 	public final static Pattern	VERSION			= Pattern.compile(VERSION_STRING);
 	public final static Version	LOWEST			= new Version();
 	public final static Version	HIGHEST			= new Version(Integer.MAX_VALUE, Integer.MAX_VALUE, Integer.MAX_VALUE,
-														"\uFFFF");
+		HIGHESTCHAR);
 
 	public static final Version	emptyVersion	= LOWEST;
 	public static final Version	ONE				= new Version(1, 0, 0);
+	public static final Pattern	SNAPSHOT_P		= Pattern.compile("(.*-)?SNAPSHOT$");
 
 	public Version() {
 		this(0);
@@ -25,6 +30,7 @@ public class Version implements Comparable<Version> {
 		this.minor = minor;
 		this.micro = micro;
 		this.qualifier = qualifier;
+		this.snapshot = isSnapshot(qualifier);
 	}
 
 	public Version(int major, int minor, int micro) {
@@ -57,6 +63,12 @@ public class Version implements Comparable<Version> {
 			micro = 0;
 
 		qualifier = m.group(7);
+		this.snapshot = isSnapshot(qualifier);
+	}
+
+	private boolean isSnapshot(String qualifier) {
+		return qualifier != null && qualifier != HIGHESTCHAR && SNAPSHOT_P.matcher(qualifier)
+			.matches();
 	}
 
 	public int getMajor() {
@@ -75,27 +87,30 @@ public class Version implements Comparable<Version> {
 		return qualifier;
 	}
 
+	@Override
 	public int compareTo(Version other) {
 		if (other == this)
 			return 0;
 
 		Version o = other;
-		if (major != o.major)
-			return major - o.major;
+		int cmp = major - o.major;
+		if (cmp != 0)
+			return cmp;
 
-		if (minor != o.minor)
-			return minor - o.minor;
+		cmp = minor - o.minor;
+		if (cmp != 0)
+			return cmp;
 
-		if (micro != o.micro)
-			return micro - o.micro;
+		cmp = micro - o.micro;
+		if (cmp != 0)
+			return cmp;
 
-		int c = 0;
 		if (qualifier != null)
-			c = 1;
+			cmp = 1;
 		if (o.qualifier != null)
-			c += 2;
+			cmp += 2;
 
-		switch (c) {
+		switch (cmp) {
 			case 0 :
 				return 0;
 			case 1 :
@@ -118,6 +133,16 @@ public class Version implements Comparable<Version> {
 			sb.append(".");
 			sb.append(qualifier);
 		}
+		return sb.toString();
+	}
+
+	public String toStringWithoutQualifier() {
+		StringBuilder sb = new StringBuilder();
+		sb.append(major);
+		sb.append(".");
+		sb.append(minor);
+		sb.append(".");
+		sb.append(micro);
 		return sb.toString();
 	}
 
@@ -152,16 +177,39 @@ public class Version implements Comparable<Version> {
 			return LOWEST;
 		}
 
+		return valueOf(version);
+	}
+
+	public static Version valueOf(String version) {
 		version = version.trim();
-		if (version.length() == 0) {
+		if (version.isEmpty()) {
 			return LOWEST;
 		}
 
 		return new Version(version);
-
 	}
 
 	public Version getWithoutQualifier() {
+		if (qualifier == null) {
+			return this;
+		}
 		return new Version(major, minor, micro);
+	}
+
+	public static boolean isVersion(String version) {
+		return version != null && VERSION.matcher(version)
+			.matches();
+	}
+
+	public boolean isSnapshot() {
+		return snapshot;
+	}
+
+	public Version bumpMajor() {
+		return new Version(major + 1);
+	}
+
+	public Version bumpMinor() {
+		return new Version(major, minor + 1);
 	}
 }

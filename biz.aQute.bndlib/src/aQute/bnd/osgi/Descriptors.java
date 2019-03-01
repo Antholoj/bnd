@@ -1,13 +1,24 @@
 package aQute.bnd.osgi;
 
-import java.util.*;
+import java.util.Arrays;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
 
-import aQute.libg.generics.*;
+import org.osgi.annotation.versioning.ProviderType;
+
+import aQute.bnd.signatures.ClassSignature;
+import aQute.bnd.signatures.FieldSignature;
+import aQute.bnd.signatures.MethodSignature;
+import aQute.libg.generics.Create;
 
 public class Descriptors {
-	Map<String,TypeRef>		typeRefCache		= Create.map();
-	Map<String,Descriptor>	descriptorCache		= Create.map();
-	Map<String,PackageRef>	packageCache		= Create.map();
+	private final Map<String, TypeRef>			typeRefCache			= new HashMap<>();
+	private final Map<String, Descriptor>		descriptorCache			= new HashMap<>();
+	private final Map<String, PackageRef>		packageRefCache			= new HashMap<>();
+	private final Map<String, ClassSignature>	classSignatureCache		= new HashMap<>();
+	private final Map<String, MethodSignature>	methodSignatureCache	= new HashMap<>();
+	private final Map<String, FieldSignature>	fieldSignatureCache		= new HashMap<>();
 
 	// MUST BE BEFORE PRIMITIVES, THEY USE THE DEFAULT PACKAGE!!
 	final static PackageRef	DEFAULT_PACKAGE		= new PackageRef();
@@ -23,12 +34,29 @@ public class Descriptors {
 	final static TypeRef	DOUBLE				= new ConcreteRef("D", "double", PRIMITIVE_PACKAGE);
 	final static TypeRef	FLOAT				= new ConcreteRef("F", "float", PRIMITIVE_PACKAGE);
 
-	{
-		packageCache.put("", DEFAULT_PACKAGE);
+	@Deprecated
+	public enum SignatureType {
+		TYPEVAR,
+		METHOD,
+		FIELD;
 	}
 
+	@Deprecated
+	public class Signature {
+		public Map<String, Signature>	typevariables	= new HashMap<>();
+		public Signature				type;
+		public List<Signature>			parameters;
+	}
+
+	public Descriptors() {
+		packageRefCache.put("", DEFAULT_PACKAGE);
+	}
+
+	@ProviderType
 	public interface TypeRef extends Comparable<TypeRef> {
 		String getBinary();
+
+		String getShorterName();
 
 		String getFQN();
 
@@ -51,6 +79,8 @@ public class Descriptors {
 		String getSourcePath();
 
 		String getDottedOnly();
+
+		boolean isArray();
 
 	}
 
@@ -108,6 +138,7 @@ public class Descriptors {
 			return this == PRIMITIVE_PACKAGE;
 		}
 
+		@Override
 		public int compareTo(PackageRef other) {
 			return fqn.compareTo(other.fqn);
 		}
@@ -125,9 +156,6 @@ public class Descriptors {
 
 		/**
 		 * Decide if the package is a metadata package.
-		 * 
-		 * @param pack
-		 * @return
 		 */
 		public boolean isMetaData() {
 			if (isDefaultPackage())
@@ -150,8 +178,6 @@ public class Descriptors {
 		final PackageRef	packageRef;
 
 		ConcreteRef(PackageRef packageRef, String binaryName) {
-			if (packageRef.getFQN().length() < 2)
-				System.err.println("in default pack? " + binaryName);
 			this.binaryName = binaryName;
 			this.fqn = binaryToFQN(binaryName);
 			this.primitive = false;
@@ -165,56 +191,81 @@ public class Descriptors {
 			this.packageRef = pref;
 		}
 
+		@Override
 		public String getBinary() {
 			return binaryName;
 		}
 
+		@Override
 		public String getPath() {
 			return binaryName + ".class";
 		}
 
+		@Override
 		public String getSourcePath() {
 			return binaryName + ".java";
 		}
 
+		@Override
 		public String getFQN() {
 			return fqn;
 		}
 
+		@Override
 		public String getDottedOnly() {
 			return fqn.replace('$', '.');
 		}
 
+		@Override
 		public boolean isPrimitive() {
 			return primitive;
 		}
 
+		@Override
 		public TypeRef getComponentTypeRef() {
 			return null;
 		}
 
+		@Override
 		public TypeRef getClassRef() {
 			return this;
 		}
 
+		@Override
 		public PackageRef getPackageRef() {
 			return packageRef;
 		}
 
+		@Override
 		public String getShortName() {
 			int n = binaryName.lastIndexOf('/');
 			return binaryName.substring(n + 1);
 		}
 
+		@Override
+		public String getShorterName() {
+			String name = getShortName();
+			int n = name.lastIndexOf('$');
+			if (n <= 0)
+				return name;
+
+			return name.substring(n + 1);
+		}
+
+		@Override
 		public boolean isJava() {
 			return packageRef.isJava();
 		}
 
+		/**
+		 * Returning {@link #getFQN()} is relied upon by other classes.
+		 */
 		@Override
 		public String toString() {
 			return fqn;
 		}
 
+		@Override
 		public boolean isObject() {
 			return fqn.equals("java.lang.Object");
 		}
@@ -225,6 +276,7 @@ public class Descriptors {
 			return this == other;
 		}
 
+		@Override
 		public int compareTo(TypeRef other) {
 			if (this == other)
 				return 0;
@@ -236,39 +288,51 @@ public class Descriptors {
 			return super.hashCode();
 		}
 
+		@Override
+		public boolean isArray() {
+			return false;
+		}
+
 	}
 
 	private static class ArrayRef implements TypeRef {
-		final TypeRef	component;
+		final TypeRef component;
 
 		ArrayRef(TypeRef component) {
 			this.component = component;
 		}
 
+		@Override
 		public String getBinary() {
 			return "[" + component.getBinary();
 		}
 
+		@Override
 		public String getFQN() {
 			return component.getFQN() + "[]";
 		}
 
+		@Override
 		public String getPath() {
 			return component.getPath();
 		}
 
+		@Override
 		public String getSourcePath() {
 			return component.getSourcePath();
 		}
 
+		@Override
 		public boolean isPrimitive() {
 			return false;
 		}
 
+		@Override
 		public TypeRef getComponentTypeRef() {
 			return component;
 		}
 
+		@Override
 		public TypeRef getClassRef() {
 			return component.getClassRef();
 		}
@@ -281,14 +345,17 @@ public class Descriptors {
 			return component.equals(((ArrayRef) other).component);
 		}
 
+		@Override
 		public PackageRef getPackageRef() {
 			return component.getPackageRef();
 		}
 
+		@Override
 		public String getShortName() {
 			return component.getShortName() + "[]";
 		}
 
+		@Override
 		public boolean isJava() {
 			return component.isJava();
 		}
@@ -298,14 +365,17 @@ public class Descriptors {
 			return component.toString() + "[]";
 		}
 
+		@Override
 		public boolean isObject() {
 			return false;
 		}
 
+		@Override
 		public String getDottedOnly() {
 			return component.getDottedOnly();
 		}
 
+		@Override
 		public int compareTo(TypeRef other) {
 			if (this == other)
 				return 0;
@@ -318,83 +388,104 @@ public class Descriptors {
 			return super.hashCode();
 		}
 
+		@Override
+		public String getShorterName() {
+			String name = getShortName();
+			int n = name.lastIndexOf('$');
+			if (n <= 0)
+				return name;
+
+			return name.substring(n + 1);
+		}
+
+		@Override
+		public boolean isArray() {
+			return true;
+		}
+
 	}
 
 	public TypeRef getTypeRef(String binaryClassName) {
 		assert !binaryClassName.endsWith(".class");
-
-		TypeRef ref = typeRefCache.get(binaryClassName);
-		if (ref != null)
-			return ref;
-
-		if (binaryClassName.startsWith("[")) {
-			ref = getTypeRef(binaryClassName.substring(1));
-			ref = new ArrayRef(ref);
-		} else {
-			if (binaryClassName.length() >= 1) {
-				switch (binaryClassName.charAt(0)) {
-					case 'V' :
-						return VOID;
-					case 'B' :
-						return BYTE;
-					case 'C' :
-						return CHAR;
-					case 'I' :
-						return INTEGER;
-					case 'S' :
-						return SHORT;
-					case 'D' :
-						return DOUBLE;
-					case 'F' :
-						return FLOAT;
-					case 'J' :
-						return LONG;
-					case 'Z' :
-						return BOOLEAN;
-					case 'L' :
-						binaryClassName = binaryClassName.substring(1, binaryClassName.length() - 1);
-						break;
-				}
-				// falls trough for other 1 letter class names
-			}
-			ref = typeRefCache.get(binaryClassName);
-			if (ref != null)
-				return ref;
-
-			PackageRef pref;
-			int n = binaryClassName.lastIndexOf('/');
-			if (n < 0)
-				pref = DEFAULT_PACKAGE;
-			else
-				pref = getPackageRef(binaryClassName.substring(0, n));
-
-			ref = new ConcreteRef(pref, binaryClassName);
+		if (binaryClassName.startsWith("L") && binaryClassName.endsWith(";")) {
+			binaryClassName = binaryClassName.substring(1, binaryClassName.length() - 1);
 		}
 
-		typeRefCache.put(binaryClassName, ref);
-		return ref;
+		binaryClassName = binaryClassName.replace('.', '$');
+
+		if (binaryClassName.startsWith("[")) {
+			// We handle arrays here since computeIfAbsent does not like
+			// recursive calls starting in Java 9
+			TypeRef ref = typeRefCache.get(binaryClassName);
+			if (ref == null) {
+				ref = new ArrayRef(getTypeRef(binaryClassName.substring(1)));
+				typeRefCache.put(binaryClassName, ref);
+			}
+			return ref;
+		}
+
+		return typeRefCache.computeIfAbsent(binaryClassName, this::createTypeRef);
+	}
+
+	private TypeRef createTypeRef(String binaryClassName) {
+		if (binaryClassName.length() == 1) {
+			switch (binaryClassName.charAt(0)) {
+				case 'V' :
+					return VOID;
+				case 'B' :
+					return BYTE;
+				case 'C' :
+					return CHAR;
+				case 'I' :
+					return INTEGER;
+				case 'S' :
+					return SHORT;
+				case 'D' :
+					return DOUBLE;
+				case 'F' :
+					return FLOAT;
+				case 'J' :
+					return LONG;
+				case 'Z' :
+					return BOOLEAN;
+			}
+			// falls through for other 1 letter class names
+		}
+		int n = binaryClassName.lastIndexOf('/');
+		PackageRef pref = (n < 0) ? DEFAULT_PACKAGE : getPackageRef(binaryClassName.substring(0, n));
+		return new ConcreteRef(pref, binaryClassName);
+	}
+
+	public TypeRef getPackageInfo(PackageRef packageRef) {
+		String bin = packageRef.getBinary() + "/package-info";
+		return getTypeRef(bin);
 	}
 
 	public PackageRef getPackageRef(String binaryPackName) {
-		if (binaryPackName.indexOf('.') >= 0) {
-			binaryPackName = binaryPackName.replace('.', '/');
-		}
-		PackageRef ref = packageCache.get(binaryPackName);
-		if (ref != null)
-			return ref;
+		binaryPackName = binaryPackName.replace('.', '/');
+		//
+		// Check here if a package is actually a nested class
+		// com.example.Foo.Bar should have package com.example,
+		// not com.example.Foo.
+		//
 
-		ref = new PackageRef(binaryPackName);
-		packageCache.put(binaryPackName, ref);
-		return ref;
+		return packageRefCache.computeIfAbsent(binaryPackName, PackageRef::new);
 	}
 
 	public Descriptor getDescriptor(String descriptor) {
-		Descriptor d = descriptorCache.get(descriptor);
-		if (d != null)
-			return d;
-		d = new Descriptor(descriptor);
-		descriptorCache.put(descriptor, d);
-		return d;
+		return descriptorCache.computeIfAbsent(descriptor, Descriptor::new);
+	}
+
+	public ClassSignature getClassSignature(String signature) {
+		return classSignatureCache.computeIfAbsent(signature.replace('$', '.'), ClassSignature::of);
+	}
+
+	public MethodSignature getMethodSignature(String signature) {
+		return methodSignatureCache.computeIfAbsent(signature.replace('$', '.'), MethodSignature::of);
+	}
+
+	public FieldSignature getFieldSignature(String signature) {
+		return fieldSignatureCache.computeIfAbsent(signature.replace('$', '.'), FieldSignature::of);
 	}
 
 	public class Descriptor {
@@ -412,7 +503,7 @@ public class Descriptors {
 					index = parse(types, descriptor, index);
 				}
 				index++; // skip )
-				prototype = types.toArray(new TypeRef[types.size()]);
+				prototype = types.toArray(new TypeRef[0]);
 				types.clear();
 			} else
 				prototype = null;
@@ -431,7 +522,6 @@ public class Descriptors {
 			switch (c) {
 				case 'L' :
 					while ((c = descriptor.charAt(index++)) != ';') {
-						// TODO
 						sb.append(c);
 					}
 					break;
@@ -449,8 +539,8 @@ public class Descriptors {
 					break;
 
 				default :
-					throw new IllegalArgumentException("Invalid type in descriptor: " + c + " from " + descriptor + "["
-							+ index + "]");
+					throw new IllegalArgumentException(
+						"Invalid type in descriptor: " + c + " from " + descriptor + "[" + index + "]");
 			}
 			types.add(getTypeRef(sb.toString()));
 			return index;
@@ -474,7 +564,10 @@ public class Descriptors {
 
 		@Override
 		public int hashCode() {
-			return prototype == null ? type.hashCode() : type.hashCode() ^ Arrays.hashCode(prototype);
+			final int prime = 31;
+			int result = prime + type.hashCode();
+			result = prime * result + ((prototype == null) ? 0 : Arrays.hashCode(prototype));
+			return result;
 		}
 
 		@Override
@@ -498,18 +591,8 @@ public class Descriptors {
 	}
 
 	public static String binaryToFQN(String binary) {
-		StringBuilder sb = new StringBuilder();
-		for (int i = 0, l = binary.length(); i < l; i++) {
-			char c = binary.charAt(i);
-
-			if (c == '/')
-				sb.append('.');
-			else
-				sb.append(c);
-		}
-		String result = sb.toString();
-		assert result.length() > 0;
-		return result;
+		assert !binary.isEmpty();
+		return binary.replace('/', '.');
 	}
 
 	public static String fqnToBinary(String binary) {
@@ -519,9 +602,10 @@ public class Descriptors {
 	public static String getPackage(String binaryNameOrFqn) {
 		int n = binaryNameOrFqn.lastIndexOf('/');
 		if (n >= 0)
-			return binaryNameOrFqn.substring(0, n).replace('/', '.');
+			return binaryNameOrFqn.substring(0, n)
+				.replace('/', '.');
 
-		n = binaryNameOrFqn.lastIndexOf(".");
+		n = binaryNameOrFqn.lastIndexOf('.');
 		if (n >= 0)
 			return binaryNameOrFqn.substring(0, n);
 
@@ -564,4 +648,5 @@ public class Descriptors {
 		assert path.endsWith(".class");
 		return getTypeRef(path.substring(0, path.length() - 6));
 	}
+
 }

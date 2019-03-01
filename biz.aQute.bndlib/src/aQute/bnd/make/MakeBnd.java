@@ -1,24 +1,28 @@
 package aQute.bnd.make;
 
-import java.io.*;
-import java.util.*;
-import java.util.regex.*;
+import java.io.File;
+import java.util.Map;
+import java.util.regex.Pattern;
 
-import aQute.bnd.build.*;
-import aQute.bnd.osgi.*;
-import aQute.bnd.service.*;
+import aQute.bnd.osgi.Builder;
+import aQute.bnd.osgi.Constants;
+import aQute.bnd.osgi.Jar;
+import aQute.bnd.osgi.JarResource;
+import aQute.bnd.osgi.Resource;
+import aQute.bnd.service.MakePlugin;
 
 public class MakeBnd implements MakePlugin, Constants {
-	final static Pattern	JARFILE	= Pattern.compile("(.+)\\.(jar|ipa)");
+	final static Pattern JARFILE = Pattern.compile("(.+)\\.(jar|ipa)");
 
-	public Resource make(Builder builder, String destination, Map<String,String> argumentsOnMake) throws Exception {
+	@Override
+	public Resource make(Builder builder, String destination, Map<String, String> argumentsOnMake) throws Exception {
 		String type = argumentsOnMake.get("type");
 		if (!"bnd".equals(type))
 			return null;
 
 		String recipe = argumentsOnMake.get("recipe");
 		if (recipe == null) {
-			builder.error("No recipe specified on a make instruction for " + destination);
+			builder.error("No recipe specified on a make instruction for %s", destination);
 			return null;
 		}
 		File bndfile = builder.getFile(recipe);
@@ -30,32 +34,28 @@ public class MakeBnd implements MakePlugin, Constants {
 			bchild.removeBundleSpecificHeaders();
 
 			// We must make sure that we do not include ourselves again!
-			bchild.setProperty(Analyzer.INCLUDE_RESOURCE, "");
-			bchild.setProperty(Analyzer.INCLUDERESOURCE, "");
+			bchild.setProperty(Constants.INCLUDE_RESOURCE, "");
+			bchild.setProperty(Constants.INCLUDERESOURCE, "");
 			bchild.setProperties(bndfile, builder.getBase());
 
 			Jar jar = bchild.build();
-			Jar dot = builder.getTarget();
-
-			if (builder.hasSources()) {
-				for (String key : jar.getResources().keySet()) {
-					if (key.startsWith("OSGI-OPT/src"))
-						dot.putResource(key, jar.getResource(key));
-				}
-			}
 			builder.getInfo(bchild, bndfile.getName() + ": ");
-			String debug = bchild.getProperty(DEBUG);
-			if (Processor.isTrue(debug)) {
-				if (builder instanceof ProjectBuilder) {
-					ProjectBuilder pb = (ProjectBuilder) builder;
-					File target = pb.getProject().getTarget();
-					String bsn = bchild.getBsn();
-					File output = new File(target, bsn + ".jar");
-					jar.write(output);
-					pb.getProject().getWorkspace().changedFile(output);
+			if (jar != null) {
+				builder.addClose(jar);
+
+				if (builder.hasSources()) {
+					Jar dot = builder.getJar();
+					if (dot != null) {
+						for (String key : jar.getResources()
+							.keySet()) {
+							if (key.startsWith("OSGI-OPT/src/"))
+								dot.putResource(key, jar.getResource(key));
+						}
+					}
 				}
+
+				return new JarResource(jar);
 			}
-			return new JarResource(jar);
 		}
 		return null;
 	}

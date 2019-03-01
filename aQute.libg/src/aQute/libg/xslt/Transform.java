@@ -1,33 +1,36 @@
 package aQute.libg.xslt;
 
-import java.io.*;
-import java.net.*;
-import java.util.*;
-import java.util.concurrent.*;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.net.URI;
+import java.net.URL;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
-import javax.xml.transform.*;
-import javax.xml.transform.stream.*;
+import javax.xml.transform.Result;
+import javax.xml.transform.Source;
+import javax.xml.transform.Templates;
+import javax.xml.transform.Transformer;
+import javax.xml.transform.TransformerFactory;
+import javax.xml.transform.stream.StreamResult;
+import javax.xml.transform.stream.StreamSource;
 
 public class Transform {
 	static TransformerFactory	transformerFactory	= TransformerFactory.newInstance();
 
-	static Map<URI,Templates>	cache				= new ConcurrentHashMap<URI,Templates>();
+	static Map<URI, Templates>	cache				= new ConcurrentHashMap<>();
 
 	public static void transform(TransformerFactory transformerFactory, URL xslt, InputStream in, OutputStream out)
-			throws Exception {
+		throws Exception {
 		if (xslt == null)
 			throw new IllegalArgumentException("No source template specified");
 
 		Templates templates = cache.get(xslt.toURI());
 		if (templates == null) {
-			InputStream xsltIn = xslt.openStream();
-			try {
+			try (InputStream xsltIn = xslt.openStream()) {
 				templates = transformerFactory.newTemplates(new StreamSource(xsltIn));
 
 				cache.put(xslt.toURI(), templates);
-			}
-			finally {
-				in.close();
 			}
 		}
 		Result xmlResult = new StreamResult(out);

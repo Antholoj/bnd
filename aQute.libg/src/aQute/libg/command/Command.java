@@ -1,26 +1,45 @@
 package aQute.libg.command;
 
-import java.io.*;
-import java.util.*;
-import java.util.Map.Entry;
-import java.util.concurrent.*;
-import java.util.concurrent.atomic.*;
+import static java.nio.charset.StandardCharsets.UTF_8;
 
-import aQute.lib.io.*;
-import aQute.service.reporter.*;
+import java.io.File;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.InterruptedIOException;
+import java.io.OutputStream;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.Collections;
+import java.util.LinkedHashMap;
+import java.util.LinkedList;
+import java.util.List;
+import java.util.Map;
+import java.util.Map.Entry;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import aQute.lib.io.IO;
+import aQute.service.reporter.Reporter;
 
 public class Command {
+	private final static Logger	logger		= LoggerFactory.getLogger(Command.class);
+	private final static int	TIMEDOUT	= 126 - 3;
 
-	boolean				trace;
-	Reporter			reporter;
-	List<String>		arguments	= new ArrayList<String>();
-	Map<String,String>	variables	= new LinkedHashMap<String,String>();
-	long				timeout		= 0;
-	File				cwd			= new File("").getAbsoluteFile();
-	static Timer		timer		= new Timer(Command.class.getName(), true);
-	Process				process;
-	volatile boolean	timedout;
-	String				fullCommand;
+	boolean						trace;
+	Reporter					reporter;
+	List<String>				arguments	= new ArrayList<>();
+	Map<String, String>			variables	= new LinkedHashMap<>();
+	long						timeout		= 0;
+	File						cwd			= new File("").getAbsoluteFile();
+	Process						process;
+	volatile boolean			timedout;
+	String						fullCommand;
+	private boolean				useThreadForInput;
 
 	public Command(String fullCommand) {
 		this.fullCommand = fullCommand;
@@ -33,7 +52,7 @@ public class Command {
 	}
 
 	public int execute(String input, Appendable stdout, Appendable stderr) throws Exception {
-		InputStream in = new ByteArrayInputStream(input.getBytes("UTF-8"));
+		InputStream in = IO.stream(input, UTF_8);
 		return execute(in, stdout, stderr);
 	}
 
@@ -62,19 +81,20 @@ public class Command {
 	}
 
 	public int execute(final InputStream in, Appendable stdout, Appendable stderr) throws Exception {
-		if (reporter != null) {
-			reporter.trace("executing cmd: %s", arguments);
-		}
-		
+		logger.debug("executing cmd: {}", arguments);
+
 		ProcessBuilder p;
 		if (fullCommand != null) {
-			p = new ProcessBuilder(fullCommand);
+			// TODO do proper splitting
+			p = new ProcessBuilder(fullCommand.split("\\s+"));
 		} else {
-			//[cs] Arguments on windows aren't processed correctly. Thus the below junk
+			// [cs] Arguments on windows aren't processed correctly. Thus the
+			// below junk
 			// http://bugs.sun.com/bugdatabase/view_bug.do?bug_id=6511002
-			
-			if (System.getProperty("os.name").startsWith("Windows")) {
-				List<String> adjustedStrings = new LinkedList<String>();
+
+			if (System.getProperty("os.name")
+				.startsWith("Windows")) {
+				List<String> adjustedStrings = new LinkedList<>();
 				for (String a : arguments) {
 					adjustedStrings.add(windowsQuote(a));
 				}
@@ -83,128 +103,113 @@ public class Command {
 				p = new ProcessBuilder(arguments);
 			}
 		}
-		
+
 		Map<String, String> env = p.environment();
-		for (Entry<String,String> s : variables.entrySet()) {
+		for (Entry<String, String> s : variables.entrySet()) {
 			env.put(s.getKey(), s.getValue());
 		}
-		
+
 		p.directory(cwd);
+		if (in == System.in)
+			p.redirectInput(ProcessBuilder.Redirect.INHERIT);
 		process = p.start();
 
 		// Make sure the command will not linger when we go
-		Runnable r = new Runnable() {
-			public void run() {
-				process.destroy();
-			}
-		};
-		Thread hook = new Thread(r, arguments.toString());
-		Runtime.getRuntime().addShutdownHook(hook);
-		TimerTask timer = null;
+		Thread hook = new Thread(() -> process.destroy(), arguments.toString());
+		Runtime.getRuntime()
+			.addShutdownHook(hook);
 		final OutputStream stdin = process.getOutputStream();
 		Thread rdInThread = null;
 
+		ScheduledExecutorService scheduler = null;
 		if (timeout != 0) {
-			timer = new TimerTask() {
-				//@Override TODO why did this not work? TimerTask implements Runnable
-				public void run() {
-					timedout = true;
-					process.destroy();
-				}
-			};
-			Command.timer.schedule(timer, timeout);
+			scheduler = Executors.newScheduledThreadPool(1);
+			scheduler.schedule(() -> {
+				timedout = true;
+				process.destroy();
+			}, timeout, TimeUnit.MILLISECONDS);
 		}
 
 		final AtomicBoolean finished = new AtomicBoolean(false);
-		InputStream out = process.getInputStream();
-		try {
-			InputStream err = process.getErrorStream();
-			try {
-				Collector cout = new Collector(out, stdout);
-				cout.start();
-				Collector cerr = new Collector(err, stderr);
-				cerr.start();
+		try (InputStream out = process.getInputStream(); InputStream err = process.getErrorStream()) {
+			Collector cout = new Collector(out, stdout);
+			cout.start();
+			Collector cerr = new Collector(err, stderr);
+			cerr.start();
 
-				if (in != null) {
-					if (in == System.in) {
-						rdInThread = new Thread("Read Input Thread") {
-							@Override
-							public void run() {
-								try {
-									while (!finished.get()) {
-										int n = in.available();
-										if (n == 0) {
-											sleep(100);
-										} else {
-											int c = in.read();
-											if (c < 0) {
-												stdin.close();
-												return;
-											}
-											stdin.write(c);
-											if (c == '\n')
-												stdin.flush();
+			if (in != null) {
+				if (in == System.in || useThreadForInput) {
+					rdInThread = new Thread("Read Input Thread") {
+						@Override
+						public void run() {
+							try {
+								while (!finished.get()) {
+									int n = in.available();
+									if (n == 0) {
+										sleep(100);
+									} else {
+										int c = in.read();
+										if (c < 0) {
+											stdin.close();
+											return;
 										}
+										stdin.write(c);
+										if (c == '\n')
+											stdin.flush();
 									}
 								}
-								catch (InterruptedIOException e) {
-									// Ignore here
-								}
-								catch (Exception e) {
-									// Who cares?
-								}
-								finally {
-									IO.close(stdin);
-								}
+							} catch (InterruptedIOException e) {
+								// Ignore here
+							} catch (Exception e) {
+								// Who cares?
+							} finally {
+								IO.close(stdin);
 							}
-						};
-						rdInThread.setDaemon(true);
-						rdInThread.start();
-					} else {
-						IO.copy(in, stdin);
-						stdin.close();
-					}
+						}
+					};
+					rdInThread.setDaemon(true);
+					rdInThread.start();
+				} else {
+					IO.copy(in, stdin);
+					stdin.close();
 				}
-				if (reporter != null)
-					reporter.trace("exited process");
+			}
+			logger.debug("exited process");
 
-				cerr.join();
-				cout.join();
-				if (reporter != null)
-					reporter.trace("stdout/stderr streams have finished");
+			cerr.join();
+			cout.join();
+			logger.debug("stdout/stderr streams have finished");
+		} finally {
+			if (scheduler != null) {
+				scheduler.shutdownNow();
 			}
-			finally {
-				err.close();
-			}
-		}
-		finally {
-			out.close();
-			if (timer != null)
-				timer.cancel();
-			Runtime.getRuntime().removeShutdownHook(hook);
+			Runtime.getRuntime()
+				.removeShutdownHook(hook);
 		}
 
-		byte exitValue = (byte) process.waitFor();
+		int exitValue = process.waitFor();
 		finished.set(true);
 		if (rdInThread != null) {
-			if (in != null)
+			if (in != System.in)
 				IO.close(in);
 			rdInThread.interrupt();
 		}
 
-		if (reporter != null)
-			reporter.trace("cmd %s executed with result=%d, result: %s/%s, timedout=%s", arguments, exitValue, stdout,
-					stderr, timedout);
+		logger.debug("cmd {} executed with result={}, result: {}/{}, timedout={}", arguments, exitValue, stdout, stderr,
+			timedout);
 
 		if (timedout)
-			return Integer.MIN_VALUE;
+			return TIMEDOUT;
 
 		return exitValue;
 	}
 
+	public void add(String arg) {
+		arguments.add(arg);
+	}
+
 	public void add(String... args) {
-		for (String arg : args)
-			arguments.add(arg);
+		Collections.addAll(arguments, args);
 	}
 
 	public void addAll(Collection<String> args) {
@@ -252,26 +257,26 @@ public class Command {
 					sb.append((char) c);
 					c = in.read();
 				}
-			}
-			catch (IOException e) {
+			} catch (IOException e) {
 				// We assume the socket is closed
-			}
-			catch (Exception e) {
+			} catch (Exception e) {
 				try {
 					sb.append("\n**************************************\n");
 					sb.append(e.toString());
 					sb.append("\n**************************************\n");
-				}
-				catch (IOException e1) {}
-				if (reporter != null) {
-					reporter.trace("cmd exec: %s", e);
-				}
+				} catch (IOException e1) {}
+				logger.debug("cmd exec", e);
 			}
 		}
 	}
 
 	public Command var(String name, String value) {
 		variables.put(name, value);
+		return this;
+	}
+
+	public Command arg(String arg) {
+		add(arg);
 		return this;
 	}
 
@@ -287,7 +292,8 @@ public class Command {
 
 	public void inherit() {
 		ProcessBuilder pb = new ProcessBuilder();
-		for (Entry<String,String> e : pb.environment().entrySet()) {
+		for (Entry<String, String> e : pb.environment()
+			.entrySet()) {
 			var(e.getKey(), e.getValue());
 		}
 	}
@@ -307,5 +313,19 @@ public class Command {
 			del = " ";
 		}
 		return sb.toString();
+	}
+
+	public List<String> getArguments() {
+		return arguments;
+	}
+
+	public void setUseThreadForInput(boolean useThreadForInput) {
+		this.useThreadForInput = useThreadForInput;
+	}
+
+	public void var(Map<String, String> env) {
+		for (Map.Entry<String, String> e : env.entrySet()) {
+			var(e.getKey(), e.getValue());
+		}
 	}
 }

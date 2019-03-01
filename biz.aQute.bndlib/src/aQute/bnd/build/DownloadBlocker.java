@@ -1,9 +1,13 @@
 package aQute.bnd.build;
 
-import java.io.*;
+import java.io.File;
+import java.util.concurrent.CountDownLatch;
 
-import aQute.bnd.service.*;
-import aQute.service.reporter.*;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import aQute.bnd.service.RepositoryPlugin;
+import aQute.service.reporter.Reporter;
 
 /**
  * This class is intended to be used by the users of a {@link RepositoryPlugin}.
@@ -15,17 +19,23 @@ import aQute.service.reporter.*;
  * failure is called.
  */
 public class DownloadBlocker implements RepositoryPlugin.DownloadListener {
+	private final static Logger logger = LoggerFactory.getLogger(DownloadBlocker.class);
+
 	public enum Stage {
-		INIT, SUCCESS, FAILURE
+		INIT,
+		SUCCESS,
+		FAILURE
 	};
 
-	private volatile Stage	stage	= Stage.INIT;
-	private String			failure;
-	private File			file;
-	private final Reporter	reporter;
+	private volatile Stage			stage	= Stage.INIT;
+	private String					failure;
+	private File					file;
+	private final Reporter			reporter;
+	private final CountDownLatch	resolved;
 
 	public DownloadBlocker(Reporter reporter) {
 		this.reporter = reporter;
+		resolved = new CountDownLatch(1);
 	}
 
 	/*
@@ -33,15 +43,18 @@ public class DownloadBlocker implements RepositoryPlugin.DownloadListener {
 	 * @see
 	 * aQute.bnd.service.RepositoryPlugin.DownloadListener#success(java.io.File)
 	 */
+	@Override
 	public void success(File file) throws Exception {
-		synchronized (this) {
+		synchronized (resolved) {
+			if (resolved.getCount() == 0) {
+				throw new IllegalStateException("already resolved");
+			}
 			assert stage == Stage.INIT;
 			stage = Stage.SUCCESS;
 			this.file = file;
-			notifyAll();
+			resolved.countDown();
 		}
-		if (reporter != null)
-			reporter.trace("successfully downloaded %s", file);
+		logger.debug("successfully downloaded {}", file);
 	}
 
 	/*
@@ -50,13 +63,17 @@ public class DownloadBlocker implements RepositoryPlugin.DownloadListener {
 	 * aQute.bnd.service.RepositoryPlugin.DownloadListener#failure(java.io.File,
 	 * java.lang.String)
 	 */
+	@Override
 	public void failure(File file, String reason) throws Exception {
-		synchronized (this) {
+		synchronized (resolved) {
+			if (resolved.getCount() == 0) {
+				throw new IllegalStateException("already resolved");
+			}
 			assert stage == Stage.INIT;
 			stage = Stage.FAILURE;
 			this.failure = reason;
 			this.file = file;
-			notifyAll();
+			resolved.countDown();
 		}
 		if (reporter != null)
 			reporter.error("Download %s %s", reason, file);
@@ -68,6 +85,7 @@ public class DownloadBlocker implements RepositoryPlugin.DownloadListener {
 	 * aQute.bnd.service.RepositoryPlugin.DownloadListener#progress(java.io.
 	 * File, int)
 	 */
+	@Override
 	public boolean progress(File file, int percentage) throws Exception {
 		assert stage == Stage.INIT;
 		return true;
@@ -80,16 +98,13 @@ public class DownloadBlocker implements RepositoryPlugin.DownloadListener {
 	 * 
 	 * @return null or a reason for a failure
 	 */
-	public synchronized String getReason() {
+	public String getReason() {
 		try {
-			while (stage == Stage.INIT)
-				wait();
-		}
-		catch (InterruptedException e) {
+			resolved.await();
+			return failure;
+		} catch (InterruptedException e) {
 			return "Interrupted";
 		}
-
-		return failure;
 	}
 
 	/**
@@ -101,11 +116,17 @@ public class DownloadBlocker implements RepositoryPlugin.DownloadListener {
 		return stage;
 	}
 
-	/*
-	 * (non-Javadoc)
-	 * @see java.lang.Object#toString()
-	 */
+	public File getFile() {
+		try {
+			resolved.await();
+			return file;
+		} catch (InterruptedException e) {
+			return null;
+		}
+	}
+
+	@Override
 	public String toString() {
-		return "DownloadBlocker(" + stage + "," + file + ", " + failure + ")";
+		return "DownloadBlocker [stage=" + stage + ", failure=" + failure + ", file=" + file + "]";
 	}
 }

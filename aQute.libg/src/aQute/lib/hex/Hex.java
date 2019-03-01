@@ -1,6 +1,8 @@
 package aQute.lib.hex;
 
-import java.io.*;
+import java.io.IOException;
+import java.util.Objects;
+import java.util.regex.Pattern;
 
 /*
  * Hex converter.
@@ -8,11 +10,14 @@ import java.io.*;
  * TODO Implement string to byte[]
  */
 public class Hex {
-	final static char[]	HEX	= {
-			'0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'A', 'B', 'C', 'D', 'E', 'F'
-							};
+	static Pattern		HEX_P	= Pattern.compile("(?:[0-9a-fA-F][0-9a-fA-Z])+");
+
+	final static char[]	HEX		= {
+		'0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'A', 'B', 'C', 'D', 'E', 'F'
+	};
 
 	public final static byte[] toByteArray(String string) {
+		Objects.requireNonNull(string, "The hex string must not be null.");
 		string = string.trim();
 		if ((string.length() & 1) != 0)
 			throw new IllegalArgumentException("a hex string must have an even length");
@@ -24,6 +29,14 @@ public class Hex {
 			out[i] = (byte) (high + low);
 		}
 		return out;
+	}
+
+	public static String toHex(byte b) {
+		char low = HEX[b & 0xF];
+		char high = HEX[(b & 0xF0) >> 4];
+		return new String(new char[] {
+			high, low
+		});
 	}
 
 	public final static int nibble(char c) {
@@ -42,8 +55,7 @@ public class Hex {
 		StringBuilder sb = new StringBuilder();
 		try {
 			append(sb, data);
-		}
-		catch (IOException e) {
+		} catch (IOException e) {
 			// cannot happen with sb
 		}
 		return sb.toString();
@@ -56,7 +68,44 @@ public class Hex {
 		}
 	}
 
-	private final static char nibble(int i) {
+	public final static char nibble(int i) {
 		return HEX[i & 0xF];
+	}
+
+	public static boolean isHex(String pub) {
+		return HEX_P.matcher(pub)
+			.matches();
+	}
+
+	public static boolean isHexCharacter(char c) {
+		if (c < '0')
+			return false;
+
+		if (c <= '9')
+			return true;
+
+		if (c < 'A')
+			return false;
+
+		if (c <= 'F')
+			return true;
+
+		// lower case are higher than upper case in Unicode!
+
+		if (c < 'a')
+			return false;
+
+		return c <= 'f';
+	}
+
+	public static String separated(byte[] bytes, String separator) {
+		String del="";
+		StringBuilder sb = new StringBuilder();
+		for ( byte x : bytes) {
+			sb.append(del);
+			sb.append(toHex(x));
+			del = separator;
+		}
+		return sb.toString();
 	}
 }

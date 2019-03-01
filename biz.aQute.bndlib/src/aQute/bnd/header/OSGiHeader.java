@@ -1,12 +1,15 @@
 package aQute.bnd.header;
 
-import java.util.*;
+import java.io.IOException;
+import java.util.List;
+import java.util.regex.Pattern;
 
-import aQute.libg.generics.*;
-import aQute.libg.qtokens.*;
-import aQute.service.reporter.*;
+import aQute.libg.generics.Create;
+import aQute.libg.qtokens.QuotedTokenizer;
+import aQute.service.reporter.Reporter;
 
 public class OSGiHeader {
+	public final static Pattern TOKEN_P = Pattern.compile("[-a-zA-Z0-9_]+");
 
 	static public Parameters parseHeader(String value) {
 		return parseHeader(value, null);
@@ -18,8 +21,7 @@ public class OSGiHeader {
 	 * value ) This is mapped to a Map { name => Map { attr|directive => value }
 	 * }
 	 * 
-	 * @param value
-	 *            A string
+	 * @param value A string
 	 * @return a Map<String,Map<String,String>>
 	 */
 	static public Parameters parseHeader(String value, Reporter logger) {
@@ -27,7 +29,8 @@ public class OSGiHeader {
 	}
 
 	static public Parameters parseHeader(String value, Reporter logger, Parameters result) {
-		if (value == null || value.trim().length() == 0)
+		if (value == null || value.trim()
+			.length() == 0)
 			return result;
 
 		QuotedTokenizer qt = new QuotedTokenizer(value, ";=,");
@@ -41,8 +44,9 @@ public class OSGiHeader {
 			del = qt.getSeparator();
 			if (name == null || name.length() == 0) {
 				if (logger != null && logger.isPedantic()) {
-					logger.warning("Empty clause, usually caused by repeating a comma without any name field or by having spaces after the backslash of a property file: "
-							+ value);
+					logger.warning(
+						"Empty clause, usually caused by repeating a comma without any name field or by having spaces after the backslash of a property file: %s",
+						value);
 				}
 				if (name == null)
 					break;
@@ -55,25 +59,31 @@ public class OSGiHeader {
 					if ((del = qt.getSeparator()) != '=') {
 						if (hadAttribute)
 							if (logger != null) {
-								logger.error("Header contains name field after attribute or directive: " + adname
-										+ " from " + value
-										+ ". Name fields must be consecutive, separated by a ';' like a;b;c;x=3;y=4");
+								logger.error(
+									"Header contains name field after attribute or directive: %s from %s. Name fields must be consecutive, separated by a ';' like a;b;c;x=3;y=4",
+									adname, value);
 							}
 						if (adname != null && adname.length() > 0)
 							aliases.add(adname.trim());
 					} else {
 						String advalue = qt.nextToken();
 						if (clause.containsKey(adname)) {
-							if (logger != null && logger.isPedantic())
-								logger.warning("Duplicate attribute/directive name " + adname + " in " + value
-										+ ". This attribute/directive will be ignored");
+							if (result.allowDuplicateAttributes()) {
+								while (clause.containsKey(adname))
+									adname += "~";
+							} else {
+								if (logger != null && logger.isPedantic())
+									logger.warning(
+										"Duplicate attribute/directive name %s in %s. This attribute/directive will be ignored",
+										adname, value);
+							}
 						}
 						if (advalue == null) {
 							if (logger != null)
-								logger.error("No value after '=' sign for attribute " + adname);
+								logger.error("No value after '=' sign for attribute %s", adname);
 							advalue = "";
 						}
-						clause.put(adname.trim(), advalue.trim());
+						clause.put(adname.trim(), advalue);
 						del = qt.getSeparator();
 						hadAttribute = true;
 					}
@@ -84,12 +94,10 @@ public class OSGiHeader {
 				// add a number of "~" to make it unique.
 				for (String clauseName : aliases) {
 					if (result.containsKey(clauseName)) {
-						if (logger != null && logger.isPedantic())
-							logger.warning("Duplicate name "
-									+ clauseName
-									+ " used in header: '"
-									+ clauseName
-									+ "'. Duplicate names are specially marked in Bnd with a ~ at the end (which is stripped at printing time).");
+						if (logger != null && logger.isPedantic() && !result.allowDuplicateAttributes())
+							logger.warning(
+								"Duplicate name %s used in header: '%s'. Duplicate names are specially marked in Bnd with a ~ at the end (which is stripped at printing time).",
+								clauseName, value);
 						while (result.containsKey(clauseName))
 							clauseName += "~";
 					}
@@ -105,7 +113,8 @@ public class OSGiHeader {
 	}
 
 	public static Attrs parseProperties(String input, Reporter logger) {
-		if (input == null || input.trim().length() == 0)
+		if (input == null || input.trim()
+			.length() == 0)
 			return new Attrs();
 
 		Attrs result = new Attrs();
@@ -114,21 +123,79 @@ public class OSGiHeader {
 
 		while (del == ',') {
 			String key = qt.nextToken(",=");
+			if (key == null) {
+				// happens at a trailing ',' without a followup
+				if (logger == null)
+					throw new IllegalArgumentException(
+						"Trailing comma found, forgot to escape the newline? Input=" + input);
+				logger.error("Trailing comma found, forgot to escape the newline? Input=", input);
+				break;
+			}
 			String value = "";
 			del = qt.getSeparator();
 			if (del == '=') {
 				value = qt.nextToken(",=");
+				if (value == null)
+					value = "";
 				del = qt.getSeparator();
 			}
-			result.put(key, value);
+			result.put(key.trim(), value);
 		}
 		if (del != 0) {
 			if (logger == null)
 				throw new IllegalArgumentException("Invalid syntax for properties: " + input);
-			logger.error("Invalid syntax for properties: " + input);
+			logger.error("Invalid syntax for properties: %s", input);
 		}
 
 		return result;
+	}
+
+	/**
+	 * @param sb
+	 * @param value
+	 */
+	public static boolean quote(StringBuilder sb, String value) {
+		try {
+			return quote((Appendable) sb, value);
+		} catch (IOException e) {
+			// this wont happen
+			throw new RuntimeException(e);
+		}
+	}
+
+	/**
+	 * @param sb
+	 * @param value
+	 * @throws IOException
+	 */
+	public static boolean quote(Appendable sb, String value) throws IOException {
+		if (value.startsWith("\\\""))
+			value = value.substring(2);
+		if (value.endsWith("\\\""))
+			value = value.substring(0, value.length() - 2);
+		if (value.startsWith("\"") && value.endsWith("\""))
+			value = value.substring(1, value.length() - 1);
+
+		boolean clean = (value.length() >= 2 && value.charAt(0) == '"' && value.charAt(value.length() - 1) == '"')
+			|| TOKEN_P.matcher(value)
+				.matches();
+		if (!clean)
+			sb.append("\"");
+		for (int i = 0; i < value.length(); i++) {
+			char c = value.charAt(i);
+			switch (c) {
+				case '"' :
+					sb.append('\\')
+						.append('"');
+					break;
+
+				default :
+					sb.append(c);
+			}
+		}
+		if (!clean)
+			sb.append("\"");
+		return clean;
 	}
 
 }

@@ -1,10 +1,30 @@
 package aQute.bnd.differ;
 
-import static aQute.bnd.service.diff.Delta.*;
+import static aQute.bnd.service.diff.Delta.ADDED;
+import static aQute.bnd.service.diff.Delta.CHANGED;
+import static aQute.bnd.service.diff.Delta.IGNORED;
+import static aQute.bnd.service.diff.Delta.MAJOR;
+import static aQute.bnd.service.diff.Delta.MICRO;
+import static aQute.bnd.service.diff.Delta.MINOR;
+import static aQute.bnd.service.diff.Delta.REMOVED;
+import static aQute.bnd.service.diff.Delta.UNCHANGED;
 
-import java.util.*;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.Collections;
+import java.util.EnumSet;
+import java.util.Formattable;
+import java.util.FormattableFlags;
+import java.util.Formatter;
+import java.util.List;
+import java.util.Objects;
+import java.util.Set;
 
-import aQute.bnd.service.diff.*;
+import aQute.bnd.service.diff.Delta;
+import aQute.bnd.service.diff.Diff;
+import aQute.bnd.service.diff.Tree;
+import aQute.bnd.service.diff.Type;
+import aQute.libg.generics.Create;
 
 /**
  * A DiffImpl class compares a newer Element to an older Element. The Element
@@ -15,10 +35,10 @@ import aQute.bnd.service.diff.*;
  * Element can be sub classed to provide special behavior.
  */
 
-public class DiffImpl implements Diff, Comparable<DiffImpl> {
+public class DiffImpl implements Diff, Comparable<DiffImpl>, Formattable {
 
-	final Tree				older;
-	final Tree				newer;
+	final Tree					older;
+	final Tree					newer;
 	final Collection<DiffImpl>	children;
 	final Delta					delta;
 
@@ -28,41 +48,38 @@ public class DiffImpl implements Diff, Comparable<DiffImpl> {
 	 * child delta for each child. This escalates deltas from below up.
 	 */
 	final static Delta[][]		TRANSITIONS	= {
-			{
+		{
 			IGNORED, UNCHANGED, CHANGED, MICRO, MINOR, MAJOR
-			}, // IGNORED
-			{
+		},													// IGNORED
+		{
 			IGNORED, UNCHANGED, CHANGED, MICRO, MINOR, MAJOR
-			}, // UNCHANGED
-			{
+		},													// UNCHANGED
+		{
 			IGNORED, CHANGED, CHANGED, MICRO, MINOR, MAJOR
-			}, // CHANGED
-			{
+		},													// CHANGED
+		{
 			IGNORED, MICRO, MICRO, MICRO, MINOR, MAJOR
-			}, // MICRO
-			{
+		},													// MICRO
+		{
 			IGNORED, MINOR, MINOR, MINOR, MINOR, MAJOR
-			}, // MINOR
-			{
+		},													// MINOR
+		{
 			IGNORED, MAJOR, MAJOR, MAJOR, MAJOR, MAJOR
-			}, // MAJOR
-			{
+		},													// MAJOR
+		{
 			IGNORED, MAJOR, MAJOR, MAJOR, MAJOR, MAJOR
-			}, // REMOVED
-			{
+		},													// REMOVED
+		{
 			IGNORED, MINOR, MINOR, MINOR, MINOR, MAJOR
-			}, // ADDED
-											};
+		},													// ADDED
+	};
 
 	/**
 	 * Compares the newer against the older, traversing the children if
 	 * necessary.
 	 * 
-	 * @param newer
-	 *            The newer Element
-	 * @param older
-	 *            The older Element
-	 * @param types
+	 * @param newer The newer Element
+	 * @param older The older Element
 	 */
 	public DiffImpl(Tree newer, Tree older) {
 		assert newer != null || older != null;
@@ -76,7 +93,7 @@ public class DiffImpl implements Diff, Comparable<DiffImpl> {
 
 		int o = 0;
 		int n = 0;
-		List<DiffImpl> children = new ArrayList<DiffImpl>();
+		List<DiffImpl> children = new ArrayList<>();
 		while (true) {
 			Tree nw = n < newerChildren.length ? newerChildren[n] : null;
 			Tree ol = o < olderChildren.length ? olderChildren[o] : null;
@@ -122,6 +139,7 @@ public class DiffImpl implements Diff, Comparable<DiffImpl> {
 	 * {@link #getDelta(aQute.bnd.service.diff.Diff.Ignore)} that allows you to
 	 * ignore Diff objects on the fly (and calculate their parents accordingly).
 	 */
+	@Override
 	public Delta getDelta() {
 		return delta;
 	}
@@ -132,6 +150,7 @@ public class DiffImpl implements Diff, Comparable<DiffImpl> {
 	 * can be useful to ignore warnings/errors.
 	 */
 
+	@Override
 	public Delta getDelta(Ignore ignore) {
 
 		// If ignored, we just return ignore.
@@ -168,15 +187,18 @@ public class DiffImpl implements Diff, Comparable<DiffImpl> {
 		}
 	}
 
+	@Override
 	public Type getType() {
 		return (newer == null ? older : newer).getType();
 	}
 
+	@Override
 	public String getName() {
 		return (newer == null ? older : newer).getName();
 	}
 
-	public Collection< ? extends Diff> getChildren() {
+	@Override
+	public Collection<? extends Diff> getChildren() {
 		return children;
 	}
 
@@ -196,9 +218,10 @@ public class DiffImpl implements Diff, Comparable<DiffImpl> {
 
 	@Override
 	public int hashCode() {
-		return getDelta().hashCode() ^ getType().hashCode() ^ getName().hashCode();
+		return Objects.hash(getDelta(), getType(), getName());
 	}
 
+	@Override
 	public int compareTo(DiffImpl other) {
 		if (getDelta() == other.getDelta()) {
 			if (getType() == other.getType()) {
@@ -209,35 +232,95 @@ public class DiffImpl implements Diff, Comparable<DiffImpl> {
 		return getDelta().compareTo(other.getDelta());
 	}
 
+	@Override
 	public Diff get(String name) {
 		for (DiffImpl child : children) {
-			if (child.getName().equals(name))
+			if (child.getName()
+				.equals(name))
 				return child;
 		}
 		return null;
 	}
 
+	@Override
 	public Tree getOlder() {
 		return older;
 	}
 
+	@Override
 	public Tree getNewer() {
 		return newer;
 	}
 
+	@Override
 	public Data serialize() {
 		Data data = new Data();
 		data.type = getType();
 		data.delta = delta;
 		data.name = getName();
 		data.children = new Data[children.size()];
-		
-		int i=0;		
-		for ( Diff d : children)
+
+		int i = 0;
+		for (Diff d : children)
 			data.children[i++] = d.serialize();
-				
+
 		return data;
 	}
 
+	@Override
+	public void formatTo(Formatter formatter, int flags, int width, int precision) {
+		boolean alternate = (flags & FormattableFlags.ALTERNATE) != 0;
+		if (alternate) {
+			Set<Delta> deltas = EnumSet.allOf(Delta.class);
+			if ((flags & FormattableFlags.UPPERCASE) != 0) {
+				deltas.remove(Delta.UNCHANGED);
+			}
+			int indent = Math.max(width, 0);
+			format(formatter, this, Create.list(), deltas, indent, 0);
+		} else {
+			StringBuilder sb = new StringBuilder();
+			sb.append('%');
+			if ((flags & FormattableFlags.LEFT_JUSTIFY) != 0) {
+				sb.append('-');
+			}
+			if (width != -1) {
+				sb.append(width);
+			}
+			if (precision != -1) {
+				sb.append('.');
+				sb.append(precision);
+			}
+			if ((flags & FormattableFlags.UPPERCASE) != 0) {
+				sb.append('S');
+			} else {
+				sb.append('s');
+			}
+			formatter.format(sb.toString(), toString());
+		}
+	}
 
+	private static void format(final Formatter formatter, final Diff diff, final List<String> formats,
+		final Set<Delta> deltas, final int indent, final int depth) {
+		if (depth == formats.size()) {
+			StringBuilder sb = new StringBuilder();
+			if (depth > 0) {
+				sb.append("%n");
+			}
+			int width = depth * 2;
+			for (int leading = width + indent; leading > 0; leading--) {
+				sb.append(' ');
+			}
+			sb.append("%-");
+			sb.append(Math.max(20 - width, 1));
+			sb.append("s %-10s %s");
+			formats.add(sb.toString());
+		}
+		String format = formats.get(depth);
+		formatter.format(format, diff.getDelta(), diff.getType(), diff.getName());
+		for (Diff childDiff : diff.getChildren()) {
+			if (deltas.contains(childDiff.getDelta())) {
+				format(formatter, childDiff, formats, deltas, indent, depth + 1);
+			}
+		}
+	}
 }

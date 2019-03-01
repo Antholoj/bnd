@@ -1,20 +1,33 @@
 package aQute.lib.json;
 
-import java.io.*;
-import java.lang.reflect.*;
-import java.security.*;
-import java.util.*;
-import java.util.zip.*;
+import static java.nio.charset.StandardCharsets.UTF_8;
 
-import aQute.lib.converter.*;
+import java.io.ByteArrayInputStream;
+import java.io.Closeable;
+import java.io.File;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.io.Reader;
+import java.io.StringReader;
+import java.lang.reflect.Type;
+import java.nio.charset.Charset;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.zip.InflaterInputStream;
+
+import aQute.lib.converter.TypeReference;
+import aQute.lib.io.IO;
 
 public class Decoder implements Closeable {
 	final JSONCodec		codec;
 	Reader				reader;
 	int					current;
 	MessageDigest		digest;
-	Map<String,Object>	extra;
-	String				encoding	= "UTF-8";
+	Map<String, Object>	extra;
+	Charset				encoding	= UTF_8;
 
 	boolean				strict;
 	boolean				inflate;
@@ -25,7 +38,7 @@ public class Decoder implements Closeable {
 	}
 
 	public Decoder from(File file) throws Exception {
-		return from(new FileInputStream(file));
+		return from(IO.stream(file));
 	}
 
 	public Decoder from(InputStream in) throws Exception {
@@ -36,7 +49,15 @@ public class Decoder implements Closeable {
 		return from(new InputStreamReader(in, encoding));
 	}
 
+	public Decoder from(byte[] data) throws Exception {
+		return from(new ByteArrayInputStream(data));
+	}
+
 	public Decoder charset(String encoding) {
+		return charset(Charset.forName(encoding));
+	}
+
+	public Decoder charset(Charset encoding) {
 		this.encoding = encoding;
 		return this;
 	}
@@ -74,11 +95,11 @@ public class Decoder implements Closeable {
 		return digest.digest();
 	}
 
+	@SuppressWarnings("unchecked")
 	public <T> T get(Class<T> clazz) throws Exception {
 		try {
 			return (T) codec.decode(clazz, this);
-		}
-		finally {
+		} finally {
 			if (!keepOpen)
 				close();
 		}
@@ -87,8 +108,7 @@ public class Decoder implements Closeable {
 	public Object get(Type type) throws Exception {
 		try {
 			return codec.decode(type, this);
-		}
-		finally {
+		} finally {
 			if (!keepOpen)
 				close();
 		}
@@ -97,18 +117,17 @@ public class Decoder implements Closeable {
 	public Object get() throws Exception {
 		try {
 			return codec.decode(null, this);
-		}
-		finally {
+		} finally {
 			if (!keepOpen)
 				close();
 		}
 	}
 
+	@SuppressWarnings("unchecked")
 	public <T> T get(TypeReference<T> ref) throws Exception {
 		try {
 			return (T) codec.decode(ref.getType(), this);
-		}
-		finally {
+		} finally {
 			if (!keepOpen)
 				close();
 		}
@@ -118,7 +137,7 @@ public class Decoder implements Closeable {
 		keepOpen = true;
 		return this;
 	}
-	
+
 	int read() throws Exception {
 		current = reader.read();
 		if (digest != null) {
@@ -135,7 +154,6 @@ public class Decoder implements Closeable {
 	/**
 	 * Skip any whitespace.
 	 * 
-	 * @return
 	 * @throws Exception
 	 */
 	int skipWs() throws Exception {
@@ -147,7 +165,6 @@ public class Decoder implements Closeable {
 	/**
 	 * Skip any whitespace.
 	 * 
-	 * @return
 	 * @throws Exception
 	 */
 	int next() throws Exception {
@@ -167,13 +184,14 @@ public class Decoder implements Closeable {
 		return c < 0;
 	}
 
+	@Override
 	public void close() throws IOException {
 		reader.close();
 	}
 
-	public Map<String,Object> getExtra() {
+	public Map<String, Object> getExtra() {
 		if (extra == null)
-			extra = new HashMap<String,Object>();
+			extra = new HashMap<>();
 		return extra;
 	}
 

@@ -1,17 +1,22 @@
 package aQute.bnd.ant;
 
-import java.io.*;
-import java.util.*;
+import java.io.File;
+import java.util.ArrayList;
+import java.util.List;
 
-import org.apache.tools.ant.*;
-import org.apache.tools.ant.types.*;
+import org.apache.tools.ant.BuildException;
+import org.apache.tools.ant.DirectoryScanner;
+import org.apache.tools.ant.types.FileSet;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
-import aQute.bnd.build.*;
 import aQute.bnd.build.Project;
+import aQute.bnd.build.Workspace;
 
 public class DeployTask extends BaseTask {
-	private String	deployRepo	= null;
-	List<FileSet>	filesets	= new ArrayList<FileSet>();
+	private final static Logger	logger		= LoggerFactory.getLogger(DeployTask.class);
+	private String				deployRepo	= null;
+	List<FileSet>				filesets	= new ArrayList<>();
 
 	@Override
 	public void execute() throws BuildException {
@@ -23,29 +28,29 @@ public class DeployTask extends BaseTask {
 				DirectoryScanner ds = fileset.getDirectoryScanner(getProject());
 				String[] files = ds.getIncludedFiles();
 				if (files.length == 0)
-					trace("No files included");
+					logger.debug("No files included");
 
 				for (int i = 0; i < files.length; i++) {
 					File file = new File(ds.getBasedir(), files[i]);
 					try {
-						if (file.isFile() && file.getName().endsWith(".jar")) {
+						if (file.isFile() && file.getName()
+							.endsWith(".jar")) {
 							if (deployRepo != null)
 								project.deploy(deployRepo, file);
 							else
 								project.deploy(file);
 						} else
 							messages.NotAJarFile_(file);
-					}
-					catch (Exception e) {
+					} catch (Exception e) {
 						messages.FailedToDeploy_Exception_(file, e);
 					}
 				}
 			}
 			report(project);
-			if (project.getErrors().size() > 0)
+			if (project.getErrors()
+				.size() > 0)
 				throw new BuildException("Deploy failed");
-		}
-		catch (Throwable t) {
+		} catch (Throwable t) {
 			t.printStackTrace();
 			throw new BuildException(t);
 		}

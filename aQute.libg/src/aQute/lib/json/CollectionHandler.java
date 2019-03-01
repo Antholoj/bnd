@@ -1,15 +1,23 @@
 package aQute.lib.json;
 
-import java.io.*;
-import java.lang.reflect.*;
-import java.util.*;
-import java.util.concurrent.*;
+import java.io.IOException;
+import java.lang.reflect.Type;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.HashSet;
+import java.util.LinkedList;
+import java.util.Map;
+import java.util.TreeSet;
+import java.util.Vector;
+import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CopyOnWriteArraySet;
 
 public class CollectionHandler extends Handler {
-	Class< ? >	rawClass;
+	Class<?>	rawClass;
 	Type		componentType;
 
-	CollectionHandler(Class< ? > rawClass, Type componentType) {
+	CollectionHandler(Class<?> rawClass, Type componentType) {
 		this.componentType = componentType;
 		if (rawClass.isInterface()) {
 			if (rawClass.isAssignableFrom(ArrayList.class))
@@ -35,22 +43,28 @@ public class CollectionHandler extends Handler {
 	}
 
 	@Override
-	void encode(Encoder app, Object object, Map<Object,Type> visited) throws IOException, Exception {
-		Iterable< ? > collection = (Iterable< ? >) object;
+	public void encode(Encoder app, Object object, Map<Object, Type> visited) throws IOException, Exception {
+		Iterable<?> collection = (Iterable<?>) object;
 
 		app.append("[");
 		String del = "";
-		for (Object o : collection) {
-			app.append(del);
-			app.encode(o, componentType, visited);
-			del = ",";
-		}
+		int index = 0;
+		for (Object o : collection)
+			try {
+				app.append(del);
+				app.encode(o, componentType, visited);
+				del = ",";
+				index++;
+			} catch (Exception e) {
+				throw new IllegalArgumentException("[" + index + "]", e);
+			}
 		app.append("]");
 	}
 
 	@Override
-	Object decodeArray(Decoder r) throws Exception {
-		Collection<Object> c = (Collection<Object>) rawClass.newInstance();
+	public Object decodeArray(Decoder r) throws Exception {
+		@SuppressWarnings("unchecked")
+		Collection<Object> c = (Collection<Object>) newInstance(rawClass);
 		r.codec.parseArray(c, componentType, r);
 		return c;
 	}

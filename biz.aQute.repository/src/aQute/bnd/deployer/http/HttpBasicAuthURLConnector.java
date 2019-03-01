@@ -1,21 +1,43 @@
 package aQute.bnd.deployer.http;
 
-import java.io.*;
-import java.net.*;
-import java.security.*;
-import java.util.*;
-import java.util.concurrent.atomic.*;
-import java.util.regex.*;
+import static java.nio.charset.StandardCharsets.UTF_8;
 
-import aQute.bnd.deployer.*;
-import aQute.bnd.service.*;
-import aQute.bnd.service.url.*;
-import aQute.lib.base64.*;
-import aQute.lib.io.*;
-import aQute.libg.glob.*;
-import aQute.service.reporter.*;
+import java.io.File;
+import java.io.IOException;
+import java.io.InputStream;
+import java.net.HttpURLConnection;
+import java.net.URL;
+import java.security.GeneralSecurityException;
+import java.util.LinkedList;
+import java.util.List;
+import java.util.Map;
+import java.util.Properties;
+import java.util.StringTokenizer;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.regex.Matcher;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import aQute.bnd.service.Plugin;
+import aQute.bnd.service.url.TaggedData;
+import aQute.bnd.service.url.URLConnector;
+import aQute.lib.base64.Base64;
+import aQute.lib.io.IO;
+import aQute.lib.utf8properties.UTF8Properties;
+import aQute.libg.glob.Glob;
+import aQute.service.reporter.Reporter;
+
+@Deprecated
+@aQute.bnd.annotation.plugin.BndPlugin(name = "urlconnector", parameters = HttpBasicAuthURLConnector.Config.class)
 public class HttpBasicAuthURLConnector implements URLConnector, Plugin {
+	private final static Logger logger = LoggerFactory.getLogger(HttpBasicAuthURLConnector.class);
+
+	@interface Config {
+		String configs();
+
+		boolean disableServerVerify() default false;
+	}
 
 	private static final String	PREFIX_PATTERN			= "pattern.";
 	private static final String	PREFIX_USER				= "uid.";
@@ -43,17 +65,21 @@ public class HttpBasicAuthURLConnector implements URLConnector, Plugin {
 	}
 
 	private final AtomicBoolean	inited				= new AtomicBoolean(false);
-	private final List<Mapping>	mappings			= new LinkedList<Mapping>();
+	private final List<Mapping>	mappings			= new LinkedList<>();
 
 	private Reporter			reporter;
 	private String				configFileList;
 	private boolean				disableSslVerify	= false;
 
+	@Override
 	public void setReporter(Reporter reporter) {
 		this.reporter = reporter;
+		reporter.error(
+			"Unfortunately we needed to break the HttpBasicAuthURLConnector plugin :-( Passwords and other communication settings are now down via the Http Client");
 	}
 
-	public void setProperties(Map<String,String> map) {
+	@Override
+	public void setProperties(Map<String, String> map) {
 		configFileList = map.get("configs");
 		if (configFileList == null)
 			throw new IllegalArgumentException("'configs' must be specified on HttpBasicAuthURLConnector");
@@ -66,14 +92,14 @@ public class HttpBasicAuthURLConnector implements URLConnector, Plugin {
 
 			StringTokenizer tokenizer = new StringTokenizer(configFileList, ",");
 			while (tokenizer.hasMoreTokens()) {
-				String configFileName = tokenizer.nextToken().trim();
+				String configFileName = tokenizer.nextToken()
+					.trim();
 
 				File file = new File(configFileName);
 				if (file.exists()) {
-					Properties props = new Properties();
-					InputStream stream = null;
-					try {
-						stream = new FileInputStream(file);
+					Properties props = new UTF8Properties();
+
+					try (InputStream stream = IO.stream(file)) {
 						props.load(stream);
 
 						for (Object key : props.keySet()) {
@@ -89,21 +115,17 @@ public class HttpBasicAuthURLConnector implements URLConnector, Plugin {
 								mappings.add(new Mapping(id, glob, uid, pwd));
 							}
 						}
-					}
-					catch (IOException e) {
+					} catch (IOException e) {
 						if (reporter != null)
 							reporter.error("Failed to load %s", configFileName);
-					}
-					finally {
-						if (stream != null)
-							IO.close(stream);
 					}
 				}
 			}
 		}
 	}
 
-	public InputStream connect(URL url) throws IOException {
+	@Override
+	public InputStream connect(URL url) throws Exception {
 		TaggedData data = connectTagged(url, null);
 		if (data == null)
 			throw new IOException("HTTP server did not respond with data.");
@@ -111,36 +133,35 @@ public class HttpBasicAuthURLConnector implements URLConnector, Plugin {
 		return data.getInputStream();
 	}
 
-	public TaggedData connectTagged(URL url) throws IOException {
+	@Override
+	public TaggedData connectTagged(URL url) throws Exception {
 		return connectTagged(url, null);
 	}
 
-	public TaggedData connectTagged(URL url, String tag) throws IOException {
+	@Override
+	public TaggedData connectTagged(URL url, String tag) throws Exception {
 		init();
 
 		for (Mapping mapping : mappings) {
 			Matcher matcher = mapping.urlPattern.matcher(url.toString());
 			if (matcher.find()) {
-				if (reporter != null)
-					reporter.trace("Found username %s, password ***** for URL '%s'. Matched on pattern %s=%s",
-							mapping.user, url, mapping.name, mapping.urlPattern.toString());
+				logger.debug("Found username {}, password ***** for URL '{}'. Matched on pattern {}={}", mapping.user,
+					url, mapping.name, mapping.urlPattern);
 				return connectTagged(url, tag, mapping.user, mapping.pass);
 			}
 		}
-		if (reporter != null)
-			reporter.trace("No username/password found for URL '%s'.", url);
+		logger.debug("No username/password found for URL '{}'.", url);
 		return connectTagged(url, tag, null, null);
 	}
 
-	private TaggedData connectTagged(URL url, String tag, String user, String pass) throws IOException {
+	private TaggedData connectTagged(URL url, String tag, String user, String pass) throws Exception {
 		TaggedData result;
 
 		HttpURLConnection connection = (HttpURLConnection) url.openConnection();
 		try {
 			if (disableSslVerify)
 				HttpsUtil.disableServerVerification(connection);
-		}
-		catch (GeneralSecurityException e) {
+		} catch (GeneralSecurityException e) {
 			if (reporter != null)
 				reporter.error("Error attempting to disable SSL server certificate verification: %s", e);
 			throw new IOException("Error attempting to disable SSL server certificate verification.");
@@ -149,7 +170,7 @@ public class HttpBasicAuthURLConnector implements URLConnector, Plugin {
 		// Add the authorization string using HTTP Basic Auth
 		if (user != null && pass != null) {
 			String authString = user + ":" + pass;
-			String encoded = Base64.encodeBase64(authString.getBytes(Constants.UTF8));
+			String encoded = Base64.encodeBase64(authString.getBytes(UTF_8));
 			connection.setRequestProperty(HEADER_AUTHORIZATION, PREFIX_BASIC_AUTH + encoded);
 		}
 
@@ -164,7 +185,7 @@ public class HttpBasicAuthURLConnector implements URLConnector, Plugin {
 			result = null;
 		else {
 			String responseTag = connection.getHeaderField(HEADER_ETAG);
-			result = new TaggedData(responseTag, connection.getInputStream());
+			result = new TaggedData(connection, connection.getInputStream());
 		}
 
 		return result;

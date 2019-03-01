@@ -1,37 +1,50 @@
 package aQute.bnd.osgi.resource;
 
-import java.util.*;
+import static java.util.Collections.unmodifiableMap;
+import static java.util.Objects.requireNonNull;
 
-import org.osgi.resource.*;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.Objects;
 
-class CapReq implements Capability, Requirement {
-	
-	static enum MODE { Capability, Requirement }
-	
-	private final MODE mode;
-	private final String	namespace;
-	private final Resource	resource;
-	private final Map<String,String>	directives;
-	private final Map<String,Object>	attributes;
+import org.osgi.resource.Capability;
+import org.osgi.resource.Namespace;
+import org.osgi.resource.Requirement;
+import org.osgi.resource.Resource;
 
-	CapReq(MODE mode, String namespace, Resource resource, Map<String, String> directives, Map<String, Object> attributes) {
-		this.mode = mode;
-		this.namespace = namespace;
+class CapReq {
+
+	static enum MODE {
+		Capability,
+		Requirement
+	}
+
+	private final MODE					mode;
+	private final String				namespace;
+	private final Resource				resource;
+	private final Map<String, String>	directives;
+	private final Map<String, Object>	attributes;
+	private transient int				hashCode	= 0;
+
+	CapReq(MODE mode, String namespace, Resource resource, Map<String, String> directives,
+		Map<String, Object> attributes) {
+		this.mode = requireNonNull(mode);
+		this.namespace = requireNonNull(namespace);
 		this.resource = resource;
-		this.directives = new HashMap<String,String>(directives);
-		this.attributes = new HashMap<String,Object>(attributes);
+		this.directives = unmodifiableMap(new HashMap<>(directives));
+		this.attributes = unmodifiableMap(new HashMap<>(attributes));
 	}
 
 	public String getNamespace() {
 		return namespace;
 	}
 
-	public Map<String,String> getDirectives() {
-		return Collections.unmodifiableMap(directives);
+	public Map<String, String> getDirectives() {
+		return directives;
 	}
 
-	public Map<String,Object> getAttributes() {
-		return Collections.unmodifiableMap(attributes);
+	public Map<String, Object> getAttributes() {
+		return attributes;
 	}
 
 	public Resource getResource() {
@@ -40,14 +53,10 @@ class CapReq implements Capability, Requirement {
 
 	@Override
 	public int hashCode() {
-		final int prime = 31;
-		int result = 1;
-		result = prime * result + ((attributes == null) ? 0 : attributes.hashCode());
-		result = prime * result + ((directives == null) ? 0 : directives.hashCode());
-		result = prime * result + ((mode == null) ? 0 : mode.hashCode());
-		result = prime * result + ((namespace == null) ? 0 : namespace.hashCode());
-		result = prime * result + ((resource == null) ? 0 : resource.hashCode());
-		return result;
+		if (hashCode != 0) {
+			return hashCode;
+		}
+		return hashCode = Objects.hash(attributes, directives, mode, namespace, resource);
 	}
 
 	@Override
@@ -56,32 +65,45 @@ class CapReq implements Capability, Requirement {
 			return true;
 		if (obj == null)
 			return false;
-		if (getClass() != obj.getClass())
+		if (obj instanceof CapReq)
+			return equalsNative((CapReq) obj);
+		if ((mode == MODE.Capability) && (obj instanceof Capability))
+			return equalsCap((Capability) obj);
+		if ((mode == MODE.Requirement) && (obj instanceof Requirement))
+			return equalsReq((Requirement) obj);
+		return false;
+	}
+
+	private boolean equalsCap(Capability other) {
+		if (!Objects.equals(namespace, other.getNamespace()))
 			return false;
-		CapReq other = (CapReq) obj;
-		if (attributes == null) {
-			if (other.attributes != null)
-				return false;
-		} else if (!attributes.equals(other.attributes))
+		if (!Objects.equals(attributes, other.getAttributes()))
 			return false;
-		if (directives == null) {
-			if (other.directives != null)
-				return false;
-		} else if (!directives.equals(other.directives))
+		if (!Objects.equals(directives, other.getDirectives()))
 			return false;
+		return Objects.equals(resource, other.getResource());
+	}
+
+	private boolean equalsNative(CapReq other) {
 		if (mode != other.mode)
 			return false;
-		if (namespace == null) {
-			if (other.namespace != null)
-				return false;
-		} else if (!namespace.equals(other.namespace))
+		if (!Objects.equals(namespace, other.getNamespace()))
 			return false;
-		if (resource == null) {
-			if (other.resource != null)
-				return false;
-		} else if (!resource.equals(other.resource))
+		if (!Objects.equals(attributes, other.getAttributes()))
 			return false;
-		return true;
+		if (!Objects.equals(directives, other.getDirectives()))
+			return false;
+		return Objects.equals(resource, other.getResource());
+	}
+
+	private boolean equalsReq(Requirement other) {
+		if (!Objects.equals(namespace, other.getNamespace()))
+			return false;
+		if (!Objects.equals(attributes, other.getAttributes()))
+			return false;
+		if (!Objects.equals(directives, other.getDirectives()))
+			return false;
+		return Objects.equals(resource, other.getResource());
 	}
 
 	@Override
@@ -89,7 +111,9 @@ class CapReq implements Capability, Requirement {
 		StringBuilder builder = new StringBuilder();
 		if (mode == MODE.Capability) {
 			Object value = attributes.get(namespace);
-			builder.append(namespace).append('=').append(value);
+			builder.append(namespace)
+				.append('=')
+				.append(value);
 		} else {
 			String filter = directives.get(Namespace.REQUIREMENT_FILTER_DIRECTIVE);
 			builder.append(filter);
@@ -98,6 +122,14 @@ class CapReq implements Capability, Requirement {
 			}
 		}
 		return builder.toString();
+	}
+
+	protected void toString(StringBuilder sb) {
+		sb.append("[")
+			.append(namespace)
+			.append("]");
+		sb.append(attributes);
+		sb.append(directives);
 	}
 
 }

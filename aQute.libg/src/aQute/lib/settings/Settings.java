@@ -1,12 +1,25 @@
 package aQute.lib.settings;
 
-import java.io.*;
-import java.security.*;
-import java.security.spec.*;
-import java.util.*;
+import java.io.File;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.security.KeyFactory;
+import java.security.KeyPair;
+import java.security.KeyPairGenerator;
+import java.security.PrivateKey;
+import java.security.PublicKey;
+import java.security.SecureRandom;
+import java.security.Signature;
+import java.security.spec.PKCS8EncodedKeySpec;
+import java.security.spec.X509EncodedKeySpec;
+import java.util.Collection;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.Set;
 
-import aQute.lib.io.*;
-import aQute.lib.json.*;
+import aQute.lib.io.IO;
+import aQute.lib.json.JSONCodec;
 
 /**
  * Maintains persistent settings for bnd (or other apps). The default is
@@ -18,10 +31,9 @@ import aQute.lib.json.*;
  * store a private key when you have a certificate, but you cannot create a
  * certificate without using com.sun classes) and preferences are not editable.
  */
-public class Settings implements Map<String,String> {
+public class Settings implements Map<String, String> {
 	static JSONCodec	codec	= new JSONCodec();
-
-	private File		where;
+	private final File	where;
 	private PublicKey	publicKey;
 	private PrivateKey	privateKey;
 	private boolean		loaded;
@@ -31,10 +43,11 @@ public class Settings implements Map<String,String> {
 		public int					version	= 1;
 		public byte[]				secret;
 		public byte[]				id;
-		public Map<String,String>	map		= new HashMap<String,String>();
+		public Map<String, String>	map		= new HashMap<>();
 	}
 
-	Data	data	= new Data();
+	Data			data	= new Data();
+	private char[]	password;
 
 	public Settings() {
 		this("~/.bnd/settings.json");
@@ -46,13 +59,38 @@ public class Settings implements Map<String,String> {
 	}
 
 	public boolean load() {
+		return load(password);
+
+	}
+
+	@SuppressWarnings("resource")
+	public boolean load(char[] password) {
+		this.password = password;
 		if (this.where.isFile() && this.where.length() > 1) {
 			try {
-				data = codec.dec().from(this.where).get(Data.class);
-				loaded = true;
-				return true;
-			}
-			catch (Exception e) {
+				InputStream in = IO.stream(this.where);
+				try {
+					if (password != null) {
+						PasswordCryptor cryptor = new PasswordCryptor();
+						in = cryptor.decrypt(password, in);
+					} else {
+						String secret = System.getenv()
+							.get("BND_SETTINGS_PASSWORD");
+						if (secret != null && secret.length() > 0) {
+							PasswordCryptor cryptor = new PasswordCryptor();
+							in = cryptor.decrypt(secret.toCharArray(), in);
+						}
+					}
+
+					data = codec.dec()
+						.from(in)
+						.get(Data.class);
+					loaded = true;
+					return true;
+				} finally {
+					in.close();
+				}
+			} catch (Exception e) {
 				throw new RuntimeException("Cannot read settings file " + this.where, e);
 			}
 		}
@@ -70,19 +108,50 @@ public class Settings implements Map<String,String> {
 	}
 
 	public void save() {
-		if (!this.where.getParentFile().isDirectory() && !this.where.getParentFile().mkdirs())
-			throw new RuntimeException("Cannot create directory in " + this.where.getParent());
+		save(password);
+	}
+
+	@SuppressWarnings("resource")
+	public void save(char[] password) {
+		try {
+			IO.mkdirs(this.where.getParentFile());
+		} catch (IOException e) {
+			throw new RuntimeException("Cannot create directory in " + this.where.getParent(), e);
+		}
 
 		try {
-			codec.enc().to(this.where).put(data).flush();
+			OutputStream out = IO.outputStream(this.where);
+			try {
+				if (password != null) {
+					PasswordCryptor cryptor = new PasswordCryptor();
+					out = cryptor.encrypt(password, out);
+				} else {
+					String secret = System.getenv()
+						.get("BND-SETTINGS-PASSWORD");
+					if (secret != null) {
+						PasswordCryptor cryptor = new PasswordCryptor();
+						out = cryptor.encrypt(secret.toCharArray(), out);
+					}
+				}
+				codec.enc()
+					.to(out)
+					.put(data)
+					.flush();
+			} finally {
+				out.close();
+			}
 			assert this.where.isFile();
-		}
-		catch (Exception e) {
+		} catch (Exception e) {
 			throw new RuntimeException("Cannot write settings file " + this.where, e);
 		}
 	}
 
 	public void generate() throws Exception {
+		generate(password);
+	}
+
+	public void generate(char[] password) throws Exception {
+		check();
 		KeyPairGenerator keyGen = KeyPairGenerator.getInstance("RSA");
 		SecureRandom random = SecureRandom.getInstance("SHA1PRNG");
 		keyGen.initialize(1024, random);
@@ -91,7 +160,7 @@ public class Settings implements Map<String,String> {
 		publicKey = pair.getPublic();
 		data.secret = privateKey.getEncoded();
 		data.id = publicKey.getEncoded();
-		save();
+		save(password);
 	}
 
 	public String getEmail() {
@@ -100,6 +169,15 @@ public class Settings implements Map<String,String> {
 
 	public void setEmail(String email) {
 		put("email", email);
+	}
+
+	public void setKeyPair(byte[] id, byte[] secret) throws Exception {
+		data.secret = secret;
+		data.id = id;
+		privateKey = null;
+		publicKey = null;
+		initKeys();
+		save();
 	}
 
 	public void setName(String v) {
@@ -142,16 +220,17 @@ public class Settings implements Map<String,String> {
 	 */
 	private void initKeys() throws Exception {
 		check();
-		if (publicKey != null)
+		if (privateKey != null)
 			return;
 
 		if (data.id == null || data.secret == null) {
 			generate();
 		} else {
 			PKCS8EncodedKeySpec privateKeySpec = new PKCS8EncodedKeySpec(data.secret);
-			X509EncodedKeySpec publicKeySpec = new X509EncodedKeySpec(data.id);
 			KeyFactory keyFactory = KeyFactory.getInstance("RSA");
 			privateKey = keyFactory.generatePrivate(privateKeySpec);
+
+			X509EncodedKeySpec publicKeySpec = new X509EncodedKeySpec(data.id);
 			publicKey = keyFactory.generatePublic(publicKeySpec);
 		}
 	}
@@ -180,65 +259,77 @@ public class Settings implements Map<String,String> {
 		return hmac.verify(con);
 	}
 
+	@Override
 	public void clear() {
 		data = new Data();
 		IO.delete(where);
 	}
 
+	@Override
 	public boolean containsKey(Object key) {
 		check();
 		return data.map.containsKey(key);
 	}
 
+	@Override
 	public boolean containsValue(Object value) {
 		check();
 		return data.map.containsValue(value);
 	}
 
-	public Set<java.util.Map.Entry<String,String>> entrySet() {
+	@Override
+	public Set<java.util.Map.Entry<String, String>> entrySet() {
 		check();
 		return data.map.entrySet();
 	}
 
+	@Override
 	public String get(Object key) {
 		check();
 
 		return data.map.get(key);
 	}
 
+	@Override
 	public boolean isEmpty() {
 		check();
 		return data.map.isEmpty();
 	}
 
+	@Override
 	public Set<String> keySet() {
 		check();
 		return data.map.keySet();
 	}
 
+	@Override
 	public String put(String key, String value) {
 		check();
 		dirty = true;
 		return data.map.put(key, value);
 	}
 
-	public void putAll(Map< ? extends String, ? extends String> v) {
+	@Override
+	public void putAll(Map<? extends String, ? extends String> v) {
 		check();
 		dirty = true;
 		data.map.putAll(v);
 	}
 
+	@Override
 	public String remove(Object key) {
 		check();
 		dirty = true;
 		return data.map.remove(key);
 	}
 
+	@Override
 	public int size() {
 		check();
 		return data.map.size();
 	}
 
+	@Override
 	public Collection<String> values() {
 		check();
 		return data.map.values();
@@ -248,4 +339,8 @@ public class Settings implements Map<String,String> {
 		return dirty;
 	}
 
+	@Override
+	public String toString() {
+		return "Settings[" + where + "]";
+	}
 }

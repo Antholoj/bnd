@@ -1,42 +1,50 @@
 package aQute.bnd.make;
 
-import java.util.*;
-import java.util.Map.Entry;
-import java.util.regex.*;
+import java.util.List;
+import java.util.Map;
+import java.util.regex.Matcher;
 
-import aQute.bnd.header.*;
-import aQute.bnd.osgi.*;
-import aQute.bnd.service.*;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import aQute.bnd.header.Attrs;
+import aQute.bnd.osgi.Builder;
+import aQute.bnd.osgi.Constants;
+import aQute.bnd.osgi.Instruction;
+import aQute.bnd.osgi.Instructions;
+import aQute.bnd.osgi.Processor;
+import aQute.bnd.osgi.Resource;
+import aQute.bnd.service.MakePlugin;
 
 public class Make {
-	Builder								builder;
-	Map<Instruction,Map<String,String>>	make;
+	private final static Logger				logger	= LoggerFactory.getLogger(Make.class);
+	Builder									builder;
+	Instructions				make;
 
 	public Make(Builder builder) {
 		this.builder = builder;
 	}
 
 	public Resource process(String source) {
-		Map<Instruction,Map<String,String>> make = getMakeHeader();
-		builder.trace("make " + source);
+		Instructions make = getMakeHeader();
+		logger.debug("make {}", source);
 
-		for (Map.Entry<Instruction,Map<String,String>> entry : make.entrySet()) {
+		for (Map.Entry<Instruction, Attrs> entry : make.entrySet()) {
 			Instruction instr = entry.getKey();
 			Matcher m = instr.getMatcher(source);
 			if (m.matches() || instr.isNegated()) {
-				Map<String,String> arguments = replace(m, entry.getValue());
+				Map<String, String> arguments = replace(m, entry.getValue());
 				List<MakePlugin> plugins = builder.getPlugins(MakePlugin.class);
 				for (MakePlugin plugin : plugins) {
 					try {
 						Resource resource = plugin.make(builder, source, arguments);
 						if (resource != null) {
-							builder.trace("Made " + source + " from args " + arguments + " with " + plugin);
+							logger.debug("Made {} from args {} with {}", source, arguments, plugin);
 							return resource;
 						}
-					}
-					catch (Exception e) {
-						builder.error("Plugin " + plugin + " generates error when use in making " + source
-								+ " with args " + arguments, e);
+					} catch (Exception e) {
+						builder.exception(e, "Plugin %s generates error when use in making %s with args %s", plugin,
+							source, arguments);
 					}
 				}
 			}
@@ -44,9 +52,9 @@ public class Make {
 		return null;
 	}
 
-	private Map<String,String> replace(Matcher m, Map<String,String> value) {
-		Map<String,String> newArgs = Processor.newMap();
-		for (Map.Entry<String,String> entry : value.entrySet()) {
+	private Map<String, String> replace(Matcher m, Map<String, String> value) {
+		Map<String, String> newArgs = Processor.newMap();
+		for (Map.Entry<String, String> entry : value.entrySet()) {
 			String s = entry.getValue();
 			s = replace(m, s);
 			newArgs.put(entry.getKey(), s);
@@ -77,21 +85,12 @@ public class Make {
 		return sb.toString();
 	}
 
-	Map<Instruction,Map<String,String>> getMakeHeader() {
-		if (make != null)
-			return make;
-		make = Processor.newMap();
-
-		String s = builder.getProperty(Builder.MAKE);
-		Parameters make = builder.parseHeader(s);
-
-		for (Entry<String,Attrs> entry : make.entrySet()) {
-			String pattern = Processor.removeDuplicateMarker(entry.getKey());
-
-			Instruction instr = new Instruction(pattern);
-			this.make.put(instr, entry.getValue());
+	Instructions getMakeHeader() {
+		if (make == null) {
+			make = new Instructions();
+			builder.getMergedParameters(Constants.MAKE)
+				.forEach((k, v) -> make.put(Instruction.legacy(k), v));
 		}
-
-		return this.make;
+		return make;
 	}
 }

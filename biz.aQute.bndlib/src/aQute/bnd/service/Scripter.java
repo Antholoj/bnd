@@ -1,10 +1,10 @@
 package aQute.bnd.service;
 
-import java.io.*;
-import java.util.*;
+import java.io.StringReader;
+import java.util.Map;
 
 public interface Scripter {
 
-	void eval(Map<String,Object> x, StringReader stringReader);
+	void eval(Map<String, Object> x, StringReader stringReader);
 
 }

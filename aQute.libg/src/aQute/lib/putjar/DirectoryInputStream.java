@@ -1,11 +1,22 @@
 package aQute.lib.putjar;
 
-import java.io.*;
-import java.util.zip.*;
+import static java.nio.charset.StandardCharsets.UTF_8;
 
-import aQute.libg.fileiterator.*;
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.File;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.util.zip.CRC32;
+
+import aQute.lib.io.IO;
+import aQute.lib.io.IOConstants;
+import aQute.libg.fileiterator.FileIterator;
 
 public class DirectoryInputStream extends InputStream {
+	static final int			BUFFER_SIZE	= IOConstants.PAGE_SIZE * 16;
+
 	final File					root;
 	final FileIterator			fi;
 	File						element;
@@ -53,7 +64,7 @@ public class DirectoryInputStream extends InputStream {
 
 			case HEADER :
 				if (element.isFile() && element.length() > 0) {
-					current = new FileInputStream(element);
+					current = IO.stream(element);
 					state = DATA;
 				} else
 					nextHeader();
@@ -83,23 +94,14 @@ public class DirectoryInputStream extends InputStream {
 
 	/**
 	 * <pre>
-	 *     end of central dir signature    4 bytes  (0x06054b50)
-	 *         number of this disk             2 bytes
-	 *         number of the disk with the
-	 *         start of the central directory  2 bytes
-	 *         total number of entries in the
-	 *         central directory on this disk  2 bytes
-	 *         total number of entries in
-	 *         the central directory           2 bytes
-	 *         size of the central directory   4 bytes
-	 *         offset of start of central
-	 *         directory with respect to
-	 *         the starting disk number        4 bytes
-	 *         .ZIP file comment length        2 bytes
-	 *         .ZIP file comment       (variable size)
+	 *  end of central dir signature 4 bytes (0x06054b50) number of this
+	 * disk 2 bytes number of the disk with the start of the central directory 2
+	 * bytes total number of entries in the central directory on this disk 2
+	 * bytes total number of entries in the central directory 2 bytes size of
+	 * the central directory 4 bytes offset of start of central directory with
+	 * respect to the starting disk number 4 bytes .ZIP file comment length 2
+	 * bytes .ZIP file comment (variable size)
 	 * </pre>
-	 * 
-	 * @return
 	 */
 	InputStream getDirectory() throws IOException {
 		long where = this.where;
@@ -138,49 +140,22 @@ public class DirectoryInputStream extends InputStream {
 	 * Local file header:
 	 * 
 	 * <pre>
-	 * 
-	 *         local file header signature     4 bytes  (0x04034b50)
-	 *         version needed to extract       2 bytes
-	 *         general purpose bit flag        2 bytes
-	 *         compression method              2 bytes
-	 *         last mod file time              2 bytes
-	 *         last mod file date              2 bytes
-	 *         crc-32                          4 bytes
-	 *         compressed size                 4 bytes
-	 *         uncompressed size               4 bytes
-	 *         file name length                2 bytes
-	 *         extra field length              2 bytes
-	 * 
-	 *         file name (variable size)
-	 *         extra field (variable size)
-	 * 
-	 *     central file header signature   4 bytes  (0x02014b50)
-	 *         version made by                 2 bytes
-	 *         version needed to extract       2 bytes
-	 *         general purpose bit flag        2 bytes
-	 *         compression method              2 bytes
-	 *         last mod file time              2 bytes
-	 *         last mod file date              2 bytes
-	 *         crc-32                          4 bytes
-	 *         compressed size                 4 bytes
-	 *         uncompressed size               4 bytes
-	 *         file name length                2 bytes
-	 *         extra field length              2 bytes
-	 *         file comment length             2 bytes
-	 *         disk number start               2 bytes
-	 *         internal file attributes        2 bytes
-	 *         external file attributes        4 bytes
-	 *         relative offset of local header 4 bytes
-	 * 
-	 *         file name (variable size)
-	 *         extra field (variable size)
-	 *         file comment (variable size)
+	 *  local file header signature 4 bytes (0x04034b50)
+	 * version needed to extract 2 bytes general purpose bit flag 2 bytes
+	 * compression method 2 bytes last mod file time 2 bytes last mod file date
+	 * 2 bytes crc-32 4 bytes compressed size 4 bytes uncompressed size 4 bytes
+	 * file name length 2 bytes extra field length 2 bytes file name (variable
+	 * size) extra field (variable size) central file header signature 4 bytes
+	 * (0x02014b50) version made by 2 bytes version needed to extract 2 bytes
+	 * general purpose bit flag 2 bytes compression method 2 bytes last mod file
+	 * time 2 bytes last mod file date 2 bytes crc-32 4 bytes compressed size 4
+	 * bytes uncompressed size 4 bytes file name length 2 bytes extra field
+	 * length 2 bytes file comment length 2 bytes disk number start 2 bytes
+	 * internal file attributes 2 bytes external file attributes 4 bytes
+	 * relative offset of local header 4 bytes file name (variable size) extra
+	 * field (variable size) file comment (variable size)
 	 * </pre>
-	 * 
 	 * </pre>
-	 * 
-	 * @param file
-	 * @return
 	 */
 	private InputStream getHeader(File root, File file) throws IOException {
 		long where = this.where;
@@ -228,7 +203,7 @@ public class DirectoryInputStream extends InputStream {
 		String p = getPath(root, file);
 		if (file.isDirectory())
 			p = p + "/";
-		byte[] path = p.getBytes("UTF-8");
+		byte[] path = p.getBytes(UTF_8);
 		writeShort(bout, path.length);
 		writeShort(directory, path.length);
 
@@ -265,17 +240,13 @@ public class DirectoryInputStream extends InputStream {
 
 	private CRC32 getCRC(File file) throws IOException {
 		CRC32 crc = new CRC32();
-		FileInputStream in = new FileInputStream(file);
-		try {
-			byte data[] = new byte[10000];
+		try (InputStream in = IO.stream(file)) {
+			byte data[] = new byte[BUFFER_SIZE];
 			int size = in.read(data);
 			while (size > 0) {
 				crc.update(data, 0, size);
 				size = in.read(data);
 			}
-		}
-		finally {
-			in.close();
 		}
 		return crc;
 	}

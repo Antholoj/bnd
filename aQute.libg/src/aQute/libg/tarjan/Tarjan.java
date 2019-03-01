@@ -1,14 +1,20 @@
 package aQute.libg.tarjan;
 
-import static java.lang.Math.*;
+import static java.lang.Math.min;
 
-import java.util.*;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
 
 public class Tarjan<T> {
 
 	public class Node {
 		final T				name;
-		final List<Node>	adjacent	= new ArrayList<Node>();
+		final List<Node>	adjacent	= new ArrayList<>();
 		int					low			= -1;
 		int					index		= -1;
 
@@ -23,8 +29,8 @@ public class Tarjan<T> {
 	}
 
 	private int			index	= 0;
-	private List<Node>	stack	= new ArrayList<Node>();
-	private Set<Set<T>>	scc		= new HashSet<Set<T>>();
+	private List<Node>	stack	= new ArrayList<>();
+	private Set<Set<T>>	scc		= new HashSet<>();
 	private Node		root	= new Node(null);
 
 	// public ArrayList<ArrayList<Node>> tarjan(Node v, AdjacencyList list){
@@ -69,7 +75,7 @@ public class Tarjan<T> {
 		}
 
 		if (v != root && v.low == v.index) {
-			Set<T> component = new HashSet<T>();
+			Set<T> component = new HashSet<>();
 			Node n;
 			do {
 				n = stack.remove(0);
@@ -80,7 +86,7 @@ public class Tarjan<T> {
 	}
 
 	Set<Set<T>> getResult(Map<T, ? extends Collection<T>> graph) {
-		Map<T,Node> index = new HashMap<T,Node>();
+		Map<T, Node> index = new HashMap<>();
 
 		for (Map.Entry<T, ? extends Collection<T>> entry : graph.entrySet()) {
 			Node node = getNode(index, entry.getKey());
@@ -92,7 +98,7 @@ public class Tarjan<T> {
 		return scc;
 	}
 
-	private Node getNode(Map<T,Node> index, T key) {
+	private Node getNode(Map<T, Node> index, T key) {
 		Node node = index.get(key);
 		if (node == null) {
 			node = new Node(key);
@@ -101,8 +107,8 @@ public class Tarjan<T> {
 		return node;
 	}
 
-	public static <T> Collection< ? extends Collection<T>> tarjan(Map<T, ? extends Collection<T>> graph) {
-		Tarjan<T> tarjan = new Tarjan<T>();
+	public static <T> Collection<? extends Collection<T>> tarjan(Map<T, ? extends Collection<T>> graph) {
+		Tarjan<T> tarjan = new Tarjan<>();
 		return tarjan.getResult(graph);
 	}
 }

@@ -1,85 +1,61 @@
-Bundle-Version: 2.0.5.${tstamp;yyyyMMdd-HHmmss}_${Git-Descriptor}
+# Set javac settings from JDT prefs
+-include: ${workspace}/cnf/includes/jdt.bnd
 
-jetty.libs: lib/javax.servlet-2.5.0.jar;version=file,\
-	lib/jetty-continuation-7.6.3.v20120416.jar;version=file,\
-	lib/jetty-http-7.6.3.v20120416.jar;version=file,\
-	lib/jetty-io-7.6.3.v20120416.jar;version=file,\
-	lib/jetty-security-7.6.3.v20120416.jar;version=file,\
-	lib/jetty-server-7.6.3.v20120416.jar;version=file,\
-	lib/jetty-util-7.6.3.v20120416.jar;version=file
-
--buildpath: osgi.core;version=4.2,\
+-buildpath: \
+	osgi.annotation;version=latest;maven-scope=provided,\
+	osgi.core;version=latest;maven-scope=provided,\
+	org.osgi.service.coordinator;version=latest;maven-scope=provided,\
+	org.osgi.service.log;version=latest,\
+	org.osgi.service.repository;version=latest,\
+	org.osgi.util.function;version=latest;maven-scope=provided,\
+	org.osgi.util.promise;version=latest;maven-scope=provided,\
 	aQute.libg;version=project,\
+	biz.aQute.bnd.annotation;version=project,\
 	biz.aQute.bndlib;version=latest,\
-	org.osgi.impl.bundle.bindex,\
-	org.osgi.impl.bundle.repoindex.lib;version=0.0.2,\
-	junit.osgi,\
-	osgi.cmpn;version=4.3.0,\
-	osgi.r5;version=1.0.1,\
-	javax.xml.stream-1.0.1.jar;version=file,\
-	org.mockito.mockito-all,\
-	ee.j2se;version=${javac.ee},\
-	${jetty.libs}
+	slf4j.api;version=latest,\
+	org.tukaani.xz;version=latest;maven-scope=provided
 
-Bnd-Plugins:
-	aQute.bnd.deployer.repository.FixedIndexedRepo,\
-	aQute.bnd.deployer.repository.LocalIndexedRepo,\
-	aQute.bnd.deployer.deployer.obr.OBR,\
-	aQute.bnd.deployer.deployer.obr.LocalOBR,\
-	aQute.bnd.deployer.deployer.http.HttpBasicAuthURLConnector
+-testpath: \
+	${junit},\
+	${mockito},\
+	biz.aQute.http.testservers;version=latest,\
+	slf4j.simple;version=latest
 
-Export-Package:\
-	aQute.bnd.deployer.http,\
-	aQute.bnd.deployer.obr,\
-	aQute.bnd.deployer.repository,\
+Export-Package: \
+	aQute.bnd.deployer.http;bnd-plugins=true,\
+	aQute.p2.api,\
+	aQute.bnd.deployer.obr;bnd-plugins=true,\
+	aQute.bnd.deployer.repository;bnd-plugins=true,\
 	aQute.bnd.deployer.repository.api,\
-	aQute.bnd.deployer.repository.providers,\
-	org.osgi.service.indexer;provide:=true,\
-	org.osgi.service.bindex;version=1.0;provide:=true,\
-	org.osgi.service.coordinator;-split-package:=merge-first,\
-	org.osgi.service.log;provide:=true;-split-package:=merge-first
+	aQute.bnd.deployer.repository.providers;bnd-plugins=true,\
+	aQute.bnd.deployer.repository.wrapper;bnd-plugins=true,\
+	aQute.bnd.repository.maven.provider;bnd-plugins=true,\
+	org.osgi.service.coordinator,\
+	org.osgi.service.indexer,\
+	aQute.bnd.repository.p2.provider;bnd-plugins=true,\
+	aQute.bnd.repository.maven.pom.provider;bnd-plugins=true,\
+	aQute.bnd.repository.osgi;bnd-plugins=true,  \
+	aQute.bnd.repository.fileset;bnd-plugins=true,  \
+	aQute.maven.*, \
 
-bindex-pkgs: \
-	org.osgi.service.obr,\
-	org.osgi.impl.bundle.bindex,\
-	org.osgi.impl.bundle.obr.resource,\
-	org.kxml2.io,\
-	org.xmlpull.v1
+-includepackage: \
+	aQute.p2.provider
 
-repoindex-pkgs: \
-	org.osgi.service.indexer.impl,\
-	org.osgi.service.indexer.impl.types,\
-	org.osgi.service.indexer.impl.util,\
-	aQute.bnd.osgi.resource,\
-	org.osgi.resource;-split-package:=first
+-conditionalpackage:\
+	aQute.lib.*,\
+	aQute.libg.*, \
+	org.tukaani.xz.*, \
+	aQute.configurable.*
 
-libg-pkgs: \
-	aQute.lib.io;-split-package:=first,\
-	aQute.lib.filter;-split-package:=first,\
-	aQute.lib.base64;-split-package:=first,\
-	aQute.bnd.filerepo,\
-	aQute.libg.generics;-split-package:=first,\
-	aQute.libg.glob;-split-package:=first,\
-	aQute.libg.gzip;-split-package:=first,\
-	aQute.libg.tuple;-split-package:=first,\
-	aQute.libg.filters;-split-package:=first
-
-# NB: `org.osgi.framework` API is included in Private-Package for running outside of OSGi.
-Private-Package:\
-	${bindex-pkgs},\
-	${repoindex-pkgs},\
-	org.osgi.framework;-split-package:=first,\
-
-Conditional-Package:\
-	aQute.lib.*;-split-package:=first,\
-	aQute.libg.*;-split-package:=first
-
-# We must also explicitly import `org.osgi.framework` etc. for when we *are* running in OSGi.
 Import-Package:\
-	org.osgi.framework;version='[1.5,2)',\
-	org.osgi.service.bindex,\
-	org.osgi.service.repository,\
-	org.osgi.resource,\
-	org.osgi.service.log,\
 	aQute.bnd.osgi.resource,\
+	org.osgi.service.coordinator; resolution:=optional,\
 	*
+
+-builderignore: testresources, testdata, maven-project
+
+-fixupmessages.tag: "Export aQute.maven.provider,* private references \\[aQute.lib.tag\\]"
+-fixupmessages.getopts: "Export aQute.bnd.repository.maven.provider,* private references \\[aQute.lib.getopt\\]"
+-fixupmessages.configurable: "Export aQute.bnd.repository.osgi,* private references \\[aQute.configurable\\]"
+
+-baseline: *

@@ -1,49 +1,176 @@
 package aQute.bnd.osgi;
 
-import java.io.*;
-import java.lang.annotation.*;
-import java.lang.reflect.*;
-import java.nio.*;
-import java.util.*;
-import java.util.regex.*;
+import static aQute.bnd.classfile.ConstantPool.CONSTANT_Class;
+import static aQute.bnd.classfile.ConstantPool.CONSTANT_Fieldref;
+import static aQute.bnd.classfile.ConstantPool.CONSTANT_InterfaceMethodref;
+import static aQute.bnd.classfile.ConstantPool.CONSTANT_MethodType;
+import static aQute.bnd.classfile.ConstantPool.CONSTANT_Methodref;
+import static aQute.bnd.classfile.ConstantPool.CONSTANT_NameAndType;
+import static aQute.bnd.classfile.ConstantPool.CONSTANT_String;
+import static java.util.Collections.emptyList;
+import static java.util.Collections.emptyMap;
+import static java.util.Collections.emptySet;
+import static java.util.Objects.requireNonNull;
+import static java.util.stream.Collectors.toMap;
 
+import java.io.DataInput;
+import java.io.DataInputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.lang.annotation.RetentionPolicy;
+import java.lang.reflect.Modifier;
+import java.nio.ByteBuffer;
+import java.util.ArrayDeque;
+import java.util.Arrays;
+import java.util.Collection;
+import java.util.Collections;
+import java.util.Comparator;
+import java.util.Deque;
+import java.util.EnumSet;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.Properties;
+import java.util.Set;
+import java.util.Spliterator;
+import java.util.Spliterators.AbstractSpliterator;
+import java.util.function.Consumer;
+import java.util.function.Function;
+import java.util.function.Predicate;
+import java.util.stream.Stream;
+import java.util.stream.StreamSupport;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import aQute.bnd.classfile.AnnotationDefaultAttribute;
+import aQute.bnd.classfile.AnnotationInfo;
+import aQute.bnd.classfile.AnnotationsAttribute;
+import aQute.bnd.classfile.Attribute;
+import aQute.bnd.classfile.BootstrapMethodsAttribute;
+import aQute.bnd.classfile.BootstrapMethodsAttribute.BootstrapMethod;
+import aQute.bnd.classfile.ClassFile;
+import aQute.bnd.classfile.CodeAttribute;
+import aQute.bnd.classfile.CodeAttribute.ExceptionHandler;
+import aQute.bnd.classfile.ConstantPool;
+import aQute.bnd.classfile.ConstantPool.AbstractRefInfo;
+import aQute.bnd.classfile.ConstantPool.MethodTypeInfo;
+import aQute.bnd.classfile.ConstantPool.NameAndTypeInfo;
+import aQute.bnd.classfile.ConstantValueAttribute;
+import aQute.bnd.classfile.DeprecatedAttribute;
+import aQute.bnd.classfile.ElementValueInfo;
+import aQute.bnd.classfile.ElementValueInfo.EnumConst;
+import aQute.bnd.classfile.ElementValueInfo.ResultConst;
+import aQute.bnd.classfile.EnclosingMethodAttribute;
+import aQute.bnd.classfile.ExceptionsAttribute;
+import aQute.bnd.classfile.FieldInfo;
+import aQute.bnd.classfile.InnerClassesAttribute;
+import aQute.bnd.classfile.InnerClassesAttribute.InnerClass;
+import aQute.bnd.classfile.MemberInfo;
+import aQute.bnd.classfile.MethodInfo;
+import aQute.bnd.classfile.MethodParametersAttribute;
+import aQute.bnd.classfile.ParameterAnnotationInfo;
+import aQute.bnd.classfile.ParameterAnnotationsAttribute;
+import aQute.bnd.classfile.RuntimeInvisibleAnnotationsAttribute;
+import aQute.bnd.classfile.RuntimeInvisibleParameterAnnotationsAttribute;
+import aQute.bnd.classfile.RuntimeInvisibleTypeAnnotationsAttribute;
+import aQute.bnd.classfile.RuntimeVisibleAnnotationsAttribute;
+import aQute.bnd.classfile.RuntimeVisibleParameterAnnotationsAttribute;
+import aQute.bnd.classfile.RuntimeVisibleTypeAnnotationsAttribute;
+import aQute.bnd.classfile.SignatureAttribute;
+import aQute.bnd.classfile.SourceFileAttribute;
+import aQute.bnd.classfile.StackMapTableAttribute;
+import aQute.bnd.classfile.StackMapTableAttribute.AppendFrame;
+import aQute.bnd.classfile.StackMapTableAttribute.FullFrame;
+import aQute.bnd.classfile.StackMapTableAttribute.ObjectVariableInfo;
+import aQute.bnd.classfile.StackMapTableAttribute.SameLocals1StackItemFrame;
+import aQute.bnd.classfile.StackMapTableAttribute.SameLocals1StackItemFrameExtended;
+import aQute.bnd.classfile.StackMapTableAttribute.StackMapFrame;
+import aQute.bnd.classfile.StackMapTableAttribute.VerificationTypeInfo;
+import aQute.bnd.classfile.TypeAnnotationInfo;
+import aQute.bnd.classfile.TypeAnnotationsAttribute;
+import aQute.bnd.osgi.Annotation.ElementType;
 import aQute.bnd.osgi.Descriptors.Descriptor;
 import aQute.bnd.osgi.Descriptors.PackageRef;
 import aQute.bnd.osgi.Descriptors.TypeRef;
-import aQute.libg.generics.*;
+import aQute.bnd.signatures.FieldSignature;
+import aQute.bnd.signatures.MethodSignature;
+import aQute.bnd.signatures.Signature;
+import aQute.lib.exceptions.Exceptions;
+import aQute.lib.io.ByteBufferDataInput;
+import aQute.lib.utf8properties.UTF8Properties;
+import aQute.libg.generics.Create;
+import aQute.libg.glob.Glob;
 
 public class Clazz {
+	private final static Logger logger = LoggerFactory.getLogger(Clazz.class);
 
-	static Pattern	METHOD_DESCRIPTOR	= Pattern.compile("\\((.*)\\)(.+)");
-
+	@Deprecated
 	public class ClassConstant {
-		int	cname;
+		final int		cname;
+		public boolean	referred;
 
 		public ClassConstant(int class_index) {
 			this.cname = class_index;
 		}
 
 		public String getName() {
-			return (String) pool[cname];
+			return constantPool.utf8(cname);
+		}
+
+		@Override
+		public String toString() {
+			return "ClassConstant[" + getName() + "]";
 		}
 	}
 
 	public static enum JAVA {
-		JDK1_1(45, "JRE-1.1"), JDK1_2(46, "J2SE-1.2"), //
-		JDK1_3(47, "J2SE-1.3"), //
-		JDK1_4(48, "J2SE-1.4"), //
-		J2SE5(49, "J2SE-1.5"), //
-		J2SE6(50, "JavaSE-1.6"), //
-		OpenJDK7(51, "JavaSE-1.7"), //
-		UNKNOWN(Integer.MAX_VALUE, "<>")//
-		;
+		JDK1_1(45, "JRE-1.1", "(&(osgi.ee=JavaSE)(version=1.1))"), //
+		JDK1_2(46, "J2SE-1.2", "(&(osgi.ee=JavaSE)(version=1.2))"), //
+		JDK1_3(47, "J2SE-1.3", "(&(osgi.ee=JavaSE)(version=1.3))"), //
+		JDK1_4(48, "J2SE-1.4", "(&(osgi.ee=JavaSE)(version=1.4))"), //
+		J2SE5(49, "J2SE-1.5", "(&(osgi.ee=JavaSE)(version=1.5))"), //
+		J2SE6(50, "JavaSE-1.6", "(&(osgi.ee=JavaSE)(version=1.6))"), //
+		OpenJDK7(51, "JavaSE-1.7", "(&(osgi.ee=JavaSE)(version=1.7))"), //
+		OpenJDK8(52, "JavaSE-1.8", "(&(osgi.ee=JavaSE)(version=1.8))") {
+
+			Map<String, Set<String>> profiles;
+
+			@Override
+			public Map<String, Set<String>> getProfiles() throws IOException {
+				if (profiles == null) {
+					Properties p = new UTF8Properties();
+					try (InputStream in = Clazz.class.getResourceAsStream("profiles-" + this + ".properties")) {
+						p.load(in);
+					}
+					profiles = new HashMap<>();
+					for (Map.Entry<Object, Object> prop : p.entrySet()) {
+						String list = (String) prop.getValue();
+						Set<String> set = new HashSet<>();
+						Collections.addAll(set, list.split("\\s*,\\s*"));
+						profiles.put((String) prop.getKey(), set);
+					}
+				}
+				return profiles;
+			}
+		}, //
+		OpenJDK9(53, "JavaSE-9", "(&(osgi.ee=JavaSE)(version=9))"), //
+		OpenJDK10(54, "JavaSE-10", "(&(osgi.ee=JavaSE)(version=10))"), //
+		OpenJDK11(55, "JavaSE-11", "(&(osgi.ee=JavaSE)(version=11))"), //
+		OpenJDK12(56, "JavaSE-12", "(&(osgi.ee=JavaSE)(version=12))"), //
+		UNKNOWN(Integer.MAX_VALUE, "<UNKNOWN>", "(osgi.ee=UNKNOWN)");
 
 		final int		major;
 		final String	ee;
+		final String	filter;
 
-		JAVA(int major, String ee) {
+		JAVA(int major, String ee, String filter) {
 			this.major = major;
 			this.ee = ee;
+			this.filter = filter;
 		}
 
 		static JAVA format(int n) {
@@ -69,8 +196,7 @@ public class Clazz {
 			return major >= J2SE5.major;
 		}
 
-		public static JAVA getJava(int major, @SuppressWarnings("unused")
-		int minor) {
+		public static JAVA getJava(int major, @SuppressWarnings("unused") int minor) {
 			for (JAVA j : JAVA.values()) {
 				if (j.major == major)
 					return j;
@@ -81,75 +207,53 @@ public class Clazz {
 		public String getEE() {
 			return ee;
 		}
+
+		public String getFilter() {
+			return filter;
+		}
+
+		public Map<String, Set<String>> getProfiles() throws IOException {
+			return null;
+		}
 	}
 
 	public static enum QUERY {
-		IMPLEMENTS, EXTENDS, IMPORTS, NAMED, ANY, VERSION, CONCRETE, ABSTRACT, PUBLIC, ANNOTATED, RUNTIMEANNOTATIONS, CLASSANNOTATIONS;
+		IMPLEMENTS,
+		EXTENDS,
+		IMPORTS,
+		NAMED,
+		ANY,
+		VERSION,
+		CONCRETE,
+		ABSTRACT,
+		PUBLIC,
+		ANNOTATED,
+		INDIRECTLY_ANNOTATED,
+		HIERARCHY_ANNOTATED,
+		HIERARCHY_INDIRECTLY_ANNOTATED,
+		RUNTIMEANNOTATIONS,
+		CLASSANNOTATIONS,
+		DEFAULT_CONSTRUCTOR;
 
 	}
 
 	public final static EnumSet<QUERY>	HAS_ARGUMENT	= EnumSet.of(QUERY.IMPLEMENTS, QUERY.EXTENDS, QUERY.IMPORTS,
-																QUERY.NAMED, QUERY.VERSION, QUERY.ANNOTATED);
+		QUERY.NAMED, QUERY.VERSION, QUERY.ANNOTATED, QUERY.INDIRECTLY_ANNOTATED, QUERY.HIERARCHY_ANNOTATED,
+		QUERY.HIERARCHY_INDIRECTLY_ANNOTATED);
 
-	/**
-	 * <pre>
-	 * ACC_PUBLIC 0x0001 Declared public; may be accessed from outside its
-	 * package. 
-	 * ACC_FINAL 0x0010 Declared final; no subclasses allowed.
-	 * ACC_SUPER 0x0020 Treat superclass methods specially when invoked by the
-	 * invokespecial instruction. 
-	 * ACC_INTERFACE 0x0200 Is an interface, not a
-	 * class. 
-	 * ACC_ABSTRACT 0x0400 Declared abstract; may not be instantiated.
-	 * </pre>
-	 * 
-	 * @param mod
-	 */
-	final static int					ACC_PUBLIC		= 0x0001;												// Declared
-	// public;
-	// may
-	// be
-	// accessed
-	// from outside its package.
-	final static int					ACC_FINAL		= 0x0010;												// Declared
-	// final;
-	// no
-	// subclasses
-	// allowed.
-	final static int					ACC_SUPER		= 0x0020;												// Treat
-	// superclass
-	// methods
-	// specially when invoked by the
-	// invokespecial instruction.
-	final static int					ACC_INTERFACE	= 0x0200;												// Is
-	// an
-	// interface,
-	// not
-	// a
-	// classs
-	final static int					ACC_ABSTRACT	= 0x0400;												// Declared
-
-	// a thing not in the source code
 	final static int					ACC_SYNTHETIC	= 0x1000;
+	final static int					ACC_BRIDGE		= 0x0040;
 	final static int					ACC_ANNOTATION	= 0x2000;
 	final static int					ACC_ENUM		= 0x4000;
+	final static int					ACC_MODULE		= 0x8000;
 
+	@Deprecated
 	static protected class Assoc {
-		Assoc(byte tag, int a, int b) {
-			this.tag = tag;
-			this.a = a;
-			this.b = b;
-		}
-
-		byte	tag;
-		int		a;
-		int		b;
+		private Assoc() {}
 	}
 
 	public abstract class Def {
-
-		final int		access;
-		Set<TypeRef>	annotations;
+		final int access;
 
 		public Def(int access) {
 			this.access = access;
@@ -176,7 +280,7 @@ public class Clazz {
 		}
 
 		public boolean isFinal() {
-			return Modifier.isFinal(access) || Clazz.this.isFinal();
+			return Modifier.isFinal(access);
 		}
 
 		public boolean isStatic() {
@@ -207,18 +311,21 @@ public class Clazz {
 			return (access & ACC_SYNTHETIC) != 0;
 		}
 
-		void addAnnotation(Annotation a) {
-			if (annotations == null)
-				annotations = Create.set();
-			annotations.add(analyzer.getTypeRef(a.name.getBinary()));
+		public boolean isModule() {
+			return Clazz.isModule(access);
 		}
 
+		public boolean isAnnotation() {
+			return Clazz.isAnnotation(access);
+		}
+
+		@Deprecated
 		public Collection<TypeRef> getAnnotations() {
-			return annotations;
+			return null;
 		}
 
 		public TypeRef getOwnerType() {
-			return className;
+			return classDef.getType();
 		}
 
 		public abstract String getName();
@@ -232,25 +339,176 @@ public class Clazz {
 		}
 	}
 
-	public class FieldDef extends Def {
-		final String		name;
-		final Descriptor	descriptor;
-		String				signature;
-		Object				constant;
-		boolean				deprecated;
+	abstract class ElementDef extends Def {
+		final Attribute[] attributes;
+
+		ElementDef(int access, Attribute[] attributes) {
+			super(access);
+			this.attributes = attributes;
+		}
 
 		public boolean isDeprecated() {
-			return deprecated;
+			return attribute(DeprecatedAttribute.class).isPresent()
+				|| annotationInfos(RuntimeVisibleAnnotationsAttribute.class)
+					.anyMatch(a -> a.type.equals("Ljava/lang/Deprecated;"));
 		}
 
-		public void setDeprecated(boolean deprecated) {
-			this.deprecated = deprecated;
+		public String getSignature() {
+			return attribute(SignatureAttribute.class).map(a -> a.signature)
+				.orElse(null);
 		}
 
+		<A extends Attribute> Stream<A> attributes(Class<A> attributeType) {
+			@SuppressWarnings("unchecked")
+			Stream<A> stream = (Stream<A>) Arrays.stream(attributes)
+				.filter(attributeType::isInstance);
+			return stream;
+		}
+
+		<A extends Attribute> Optional<A> attribute(Class<A> attributeType) {
+			return attributes(attributeType).findFirst();
+		}
+
+		<A extends AnnotationsAttribute> Stream<AnnotationInfo> annotationInfos(Class<A> attributeType) {
+			return attributes(attributeType).flatMap(a -> Arrays.stream(a.annotations));
+		}
+
+		public Stream<Annotation> annotations(String binaryNameFilter) {
+			Predicate<AnnotationInfo> matches = matches(binaryNameFilter);
+			ElementType elementType = elementType();
+			Stream<Annotation> runtimeAnnotations = annotationInfos(RuntimeVisibleAnnotationsAttribute.class)
+				.filter(matches)
+				.map(a -> newAnnotation(a, elementType, RetentionPolicy.RUNTIME, access));
+			Stream<Annotation> classAnnotations = annotationInfos(RuntimeInvisibleAnnotationsAttribute.class)
+				.filter(matches)
+				.map(a -> newAnnotation(a, elementType, RetentionPolicy.CLASS, access));
+			return Stream.concat(runtimeAnnotations, classAnnotations);
+		}
+
+		Predicate<AnnotationInfo> matches(String binaryNameFilter) {
+			if ((binaryNameFilter == null) || binaryNameFilter.equals("*")) {
+				return annotationInfo -> true;
+			}
+			Glob glob = new Glob("L{" + binaryNameFilter + "};");
+			return annotationInfo -> glob.matches(annotationInfo.type);
+		}
+
+		<A extends TypeAnnotationsAttribute> Stream<TypeAnnotationInfo> typeAnnotationInfos(Class<A> attributeType) {
+			return attributes(attributeType).flatMap(a -> Arrays.stream(a.type_annotations));
+		}
+
+		public Stream<TypeAnnotation> typeAnnotations(String binaryNameFilter) {
+			Predicate<AnnotationInfo> matches = matches(binaryNameFilter);
+			ElementType elementType = elementType();
+			Stream<TypeAnnotation> runtimeTypeAnnotations = typeAnnotationInfos(
+				RuntimeVisibleTypeAnnotationsAttribute.class).filter(matches)
+					.map(a -> newTypeAnnotation(a, elementType, RetentionPolicy.RUNTIME, access));
+			Stream<TypeAnnotation> classTypeAnnotations = typeAnnotationInfos(
+				RuntimeInvisibleTypeAnnotationsAttribute.class).filter(matches)
+					.map(a -> newTypeAnnotation(a, elementType, RetentionPolicy.CLASS, access));
+			return Stream.concat(runtimeTypeAnnotations, classTypeAnnotations);
+		}
+
+		@Override
+		public String getName() {
+			return super.toString();
+		}
+
+		@Override
+		public TypeRef getType() {
+			return null;
+		}
+
+		@Override
+		public TypeRef[] getPrototype() {
+			return null;
+		}
+
+		@Override
+		public String toString() {
+			return getName();
+		}
+
+		abstract ElementType elementType();
+	}
+
+	class CodeDef extends ElementDef {
+		private final ElementType elementType;
+
+		CodeDef(CodeAttribute code, ElementType elementType) {
+			super(0, code.attributes);
+			this.elementType = elementType;
+		}
+
+		@Override
+		ElementType elementType() {
+			return elementType;
+		}
+
+		@Override
+		public boolean isDeprecated() {
+			return false;
+		}
+	}
+
+	class ClassDef extends ElementDef {
+		private final TypeRef type;
+
+		ClassDef(ClassFile classFile) {
+			super(classFile.access, classFile.attributes);
+			type = analyzer.getTypeRef(classFile.this_class);
+		}
+
+		String getSourceFile() {
+			return attribute(SourceFileAttribute.class).map(a -> a.sourcefile)
+				.orElse(null);
+		}
+
+		boolean isInnerClass() {
+			String binary = type.getBinary();
+			return attributes(InnerClassesAttribute.class).flatMap(a -> Arrays.stream(a.classes))
+				.anyMatch(inner -> (inner.inner_name != null) && !Modifier.isStatic(inner.inner_access)
+					&& inner.inner_class.equals(binary));
+		}
+
+		@Override
+		public String getName() {
+			return type.getFQN();
+		}
+
+		@Override
+		public TypeRef getType() {
+			return type;
+		}
+
+		@Override
+		ElementType elementType() {
+			if (isAnnotation()) {
+				return ElementType.ANNOTATION_TYPE;
+			}
+			if (isModule()) {
+				return ElementType.MODULE;
+			}
+			return type.getBinary()
+				.endsWith("/package-info") ? ElementType.PACKAGE : ElementType.TYPE;
+		}
+	}
+
+	public class FieldDef extends ElementDef {
+		final String		name;
+		final Descriptor	descriptor;
+
+		@Deprecated
 		public FieldDef(int access, String name, String descriptor) {
-			super(access);
+			super(access, new Attribute[0]);
 			this.name = name;
 			this.descriptor = analyzer.getDescriptor(descriptor);
+		}
+
+		FieldDef(MemberInfo memberInfo) {
+			super(memberInfo.access, memberInfo.attributes);
+			this.name = memberInfo.name;
+			this.descriptor = analyzer.getDescriptor(memberInfo.descriptor);
 		}
 
 		@Override
@@ -263,6 +521,9 @@ public class Clazz {
 			return descriptor.getType();
 		}
 
+		@Deprecated
+		public void setDeprecated(boolean deprecated) {}
+
 		public TypeRef getContainingClass() {
 			return getClassName();
 		}
@@ -271,26 +532,18 @@ public class Clazz {
 			return descriptor;
 		}
 
-		public void setConstant(Object o) {
-			this.constant = o;
-		}
+		@Deprecated
+		public void setConstant(Object o) {}
 
 		public Object getConstant() {
-			return this.constant;
+			return attribute(ConstantValueAttribute.class).map(a -> a.value)
+				.orElse(null);
 		}
 
-		// TODO change to use proper generics
 		public String getGenericReturnType() {
-			String use = descriptor.toString();
-			if (signature != null)
-				use = signature;
-
-			Matcher m = METHOD_DESCRIPTOR.matcher(use);
-			if (!m.matches())
-				throw new IllegalArgumentException("Not a valid method descriptor: " + descriptor);
-
-			String returnType = m.group(2);
-			return objectDescriptorToFQN(returnType);
+			String signature = getSignature();
+			FieldSignature sig = analyzer.getFieldSignature((signature != null) ? signature : descriptor.toString());
+			return sig.type.toString();
 		}
 
 		@Override
@@ -298,19 +551,50 @@ public class Clazz {
 			return null;
 		}
 
-		public String getSignature() {
-			return signature;
+		@Override
+		ElementType elementType() {
+			return ElementType.FIELD;
+		}
+	}
+
+	public static class MethodParameter {
+		private final MethodParametersAttribute.MethodParameter methodParameter;
+
+		MethodParameter(MethodParametersAttribute.MethodParameter methodParameter) {
+			this.methodParameter = methodParameter;
+		}
+
+		public String getName() {
+			return methodParameter.name;
+		}
+
+		public int getAccess() {
+			return methodParameter.access_flags;
 		}
 
 		@Override
 		public String toString() {
-			return name;
+			return getName();
+		}
+
+		static MethodParameter[] parameters(MethodParametersAttribute attribute) {
+			int parameters_count = attribute.parameters.length;
+			MethodParameter[] parameters = new MethodParameter[parameters_count];
+			for (int i = 0; i < parameters_count; i++) {
+				parameters[i] = new MethodParameter(attribute.parameters[i]);
+			}
+			return parameters;
 		}
 	}
 
 	public class MethodDef extends FieldDef {
+		@Deprecated
 		public MethodDef(int access, String method, String descriptor) {
 			super(access, method, descriptor);
+		}
+
+		public MethodDef(MethodInfo methodInfo) {
+			super(methodInfo);
 		}
 
 		public boolean isConstructor() {
@@ -318,14 +602,86 @@ public class Clazz {
 		}
 
 		@Override
+		public boolean isFinal() {
+			return super.isFinal() || Modifier.isFinal(classDef.getAccess());
+		}
+
+		@Override
 		public TypeRef[] getPrototype() {
 			return descriptor.getPrototype();
+		}
+
+		public boolean isBridge() {
+			return (access & ACC_BRIDGE) != 0;
+		}
+
+		@Override
+		public String getGenericReturnType() {
+			String signature = getSignature();
+			MethodSignature sig = analyzer.getMethodSignature((signature != null) ? signature : descriptor.toString());
+			return sig.resultType.toString();
+		}
+
+		public MethodParameter[] getParameters() {
+			return attribute(MethodParametersAttribute.class).map(MethodParameter::parameters)
+				.orElseGet(() -> new MethodParameter[0]);
+		}
+
+		@Override
+		public Object getConstant() {
+			return attribute(AnnotationDefaultAttribute.class).map(a -> annotationDefault(a, access))
+				.orElse(null);
+		}
+
+		<A extends ParameterAnnotationsAttribute> Stream<ParameterAnnotationInfo> parameterAnnotationInfos(
+			Class<A> attributeType) {
+			return attributes(attributeType).flatMap(a -> Arrays.stream(a.parameter_annotations));
+		}
+
+		public Stream<ParameterAnnotation> parameterAnnotations(String binaryNameFilter) {
+			Predicate<AnnotationInfo> matches = matches(binaryNameFilter);
+			ElementType elementType = elementType();
+			Stream<ParameterAnnotation> runtimeParameterAnnotations = parameterAnnotationInfos(
+				RuntimeVisibleParameterAnnotationsAttribute.class)
+					.flatMap(a -> parameterAnnotations(a, matches, elementType, RetentionPolicy.RUNTIME));
+			Stream<ParameterAnnotation> classParameterAnnotations = parameterAnnotationInfos(
+				RuntimeInvisibleParameterAnnotationsAttribute.class)
+					.flatMap(a -> parameterAnnotations(a, matches, elementType, RetentionPolicy.CLASS));
+			return Stream.concat(runtimeParameterAnnotations, classParameterAnnotations);
+		}
+
+		private Stream<ParameterAnnotation> parameterAnnotations(ParameterAnnotationInfo parameterAnnotationInfo,
+			Predicate<AnnotationInfo> matches, ElementType elementType, RetentionPolicy policy) {
+			int parameter = parameterAnnotationInfo.parameter;
+			return Arrays.stream(parameterAnnotationInfo.annotations)
+				.filter(matches)
+				.map(a -> newParameterAnnotation(parameter, a, elementType, policy, access));
+		}
+
+		/**
+		 * We must also look in the method's Code attribute for type
+		 * annotations.
+		 */
+		@Override
+		<A extends TypeAnnotationsAttribute> Stream<TypeAnnotationInfo> typeAnnotationInfos(Class<A> attributeType) {
+			ElementType elementType = elementType();
+			Stream<A> methodAttributes = attributes(attributeType);
+			Stream<A> codeAttributes = attribute(CodeAttribute.class)
+				.map(code -> new CodeDef(code, elementType).attributes(attributeType))
+				.orElseGet(Stream::empty);
+			return Stream.concat(methodAttributes, codeAttributes)
+				.flatMap(a -> Arrays.stream(a.type_annotations));
+		}
+
+		@Override
+		ElementType elementType() {
+			return name.equals("<init>") ? ElementType.CONSTRUCTOR : ElementType.METHOD;
 		}
 	}
 
 	public class TypeDef extends Def {
-		TypeRef	type;
-		boolean	interf;
+		final TypeRef	type;
+		final boolean	interf;
 
 		public TypeDef(TypeRef type, boolean interf) {
 			super(Modifier.PUBLIC);
@@ -359,54 +715,34 @@ public class Clazz {
 		}
 	}
 
-	final static byte	SkipTable[]	= { //
-			0, // 0 non existent
-			-1, // 1 CONSTANT_utf8 UTF 8, handled in
-			// method
-			-1, // 2
-			4, // 3 CONSTANT_Integer
-			4, // 4 CONSTANT_Float
-			8, // 5 CONSTANT_Long (index +=2!)
-			8, // 6 CONSTANT_Double (index +=2!)
-			-1, // 7 CONSTANT_Class
-			2, // 8 CONSTANT_String
-			4, // 9 CONSTANT_FieldRef
-			4, // 10 CONSTANT_MethodRef
-			4, // 11 CONSTANT_InterfaceMethodRef
-			4, // 12 CONSTANT_NameAndType
-			-1, // 13 Not defined
-			-1, // 14 Not defined
-			3, // 15 CONSTANT_MethodHandle
-			2, // 16 CONSTANT_MethodType
-			-1, // 17 Not defined
-			4, // 18 CONSTANT_InvokeDynamic
-									};
+	public static final Comparator<Clazz>	NAME_COMPARATOR					= (Clazz a, Clazz b) -> a.classDef.getType()
+		.compareTo(b.classDef.getType());
 
-	boolean				hasRuntimeAnnotations;
-	boolean				hasClassAnnotations;
+	private boolean							hasRuntimeAnnotations;
+	private boolean							hasClassAnnotations;
+	private boolean							hasDefaultConstructor;
 
-	TypeRef				className;
-	Object				pool[];
-	int					intPool[];
-	Set<PackageRef>		imports		= Create.set();
-	String				path;
-	int					minor		= 0;
-	int					major		= 0;
-	int					innerAccess	= -1;
-	int					accessx		= 0;
-	String				sourceFile;
-	Set<TypeRef>		xref;
-	Set<TypeRef>		annotations;
-	int					forName		= 0;
-	int					class$		= 0;
-	TypeRef[]			interfaces;
-	TypeRef				zuper;
-	ClassDataCollector	cd			= null;
-	Resource			resource;
-	FieldDef			last		= null;
-	boolean				deprecated;
-	Set<PackageRef>		api;
-	final Analyzer		analyzer;
+	private Set<PackageRef>					imports							= Create.set();
+	private Set<TypeRef>					xref							= new HashSet<>();
+	private Set<TypeRef>					annotations;
+	private int								forName							= 0;
+	private int								class$							= 0;
+	private Set<PackageRef>					api;
+
+	private ClassFile						classFile						= null;
+	private ConstantPool					constantPool					= null;
+	TypeRef									superClass;
+	private TypeRef[]						interfaces;
+	ClassDef								classDef;
+
+	private Map<TypeRef, Integer>			referred						= null;
+
+	final Analyzer							analyzer;
+	final String							path;
+	final Resource							resource;
+
+	public static final int					TYPEUSE_INDEX_NONE				= TypeAnnotationInfo.TYPEUSE_INDEX_NONE;
+	public static final int					TYPEUSE_TARGET_INDEX_EXTENDS	= TypeAnnotationInfo.TYPEUSE_TARGET_INDEX_EXTENDS;
 
 	public Clazz(Analyzer analyzer, String path, Resource resource) {
 		this.path = path;
@@ -423,353 +759,171 @@ public class Clazz {
 	}
 
 	public Set<TypeRef> parseClassFileWithCollector(ClassDataCollector cd) throws Exception {
-		InputStream in = resource.openInputStream();
-		try {
-			return parseClassFile(in, cd);
+		ByteBuffer bb = resource.buffer();
+		if (bb != null) {
+			return parseClassFileData(ByteBufferDataInput.wrap(bb), cd);
 		}
-		finally {
-			in.close();
-		}
+		return parseClassFile(resource.openInputStream(), cd);
 	}
 
 	public Set<TypeRef> parseClassFile(InputStream in, ClassDataCollector cd) throws Exception {
-		DataInputStream din = new DataInputStream(in);
-		try {
-			this.cd = cd;
-			return parseClassFile(din);
-		}
-		finally {
-			cd = null;
-			din.close();
+		try (DataInputStream din = new DataInputStream(in)) {
+			return parseClassFileData(din, cd);
 		}
 	}
 
-	Set<TypeRef> parseClassFile(DataInputStream in) throws Exception {
-		xref = new HashSet<TypeRef>();
+	private Set<TypeRef> parseClassFileData(DataInput in, ClassDataCollector cd) throws Exception {
+		Set<TypeRef> xref = parseClassFileData(in);
+		visitClassFile(cd);
+		return xref;
+	}
 
-		boolean crawl = cd != null; // Crawl the byte code if we have a
-		// collector
-		int magic = in.readInt();
-		if (magic != 0xCAFEBABE)
-			throw new IOException("Not a valid class file (no CAFEBABE header)");
+	private synchronized Set<TypeRef> parseClassFileData(DataInput in) throws Exception {
+		if (classFile != null) {
+			return xref;
+		}
 
-		minor = in.readUnsignedShort(); // minor version
-		major = in.readUnsignedShort(); // major version
-		if (cd != null)
-			cd.version(minor, major);
-		int count = in.readUnsignedShort();
-		pool = new Object[count];
-		intPool = new int[count];
+		logger.debug("parseClassFile(): path={} resource={}", path, resource);
 
-		process: for (int poolIndex = 1; poolIndex < count; poolIndex++) {
-			byte tag = in.readByte();
-			switch (tag) {
-				case 0 :
-					break process;
-				case 1 :
-					constantUtf8(in, poolIndex);
+		classFile = ClassFile.parseClassFile(in);
+		classDef = new ClassDef(classFile);
+		constantPool = classFile.constant_pool;
+		referred = new HashMap<>(constantPool.size());
+
+		if (classDef.isPublic()) {
+			api = new HashSet<>();
+		}
+		if (!classDef.isModule()) {
+			referTo(classDef.getType(), Modifier.PUBLIC);
+		}
+
+		String superName = classFile.super_class;
+		if (superName == null) {
+			if (!(classDef.getType()
+				.isObject() || classDef.isModule())) {
+				throw new IOException("Class does not have a super class and is not java.lang.Object or module-info");
+			}
+		} else {
+			superClass = analyzer.getTypeRef(superName);
+			referTo(superClass, classFile.access);
+		}
+
+		int interfaces_count = classFile.interfaces.length;
+		if (interfaces_count > 0) {
+			interfaces = new TypeRef[interfaces_count];
+			for (int i = 0; i < interfaces_count; i++) {
+				interfaces[i] = analyzer.getTypeRef(classFile.interfaces[i]);
+				referTo(interfaces[i], classFile.access);
+			}
+		}
+
+		// All name&type and class constant records contain descriptors we
+		// must treat as references, though not API
+		int constant_pool_count = constantPool.size();
+		for (int i = 1; i < constant_pool_count; i++) {
+			switch (constantPool.tag(i)) {
+				case CONSTANT_Fieldref :
+				case CONSTANT_Methodref :
+				case CONSTANT_InterfaceMethodref : {
+					AbstractRefInfo info = constantPool.entry(i);
+					classConstRef(constantPool.className(info.class_index));
 					break;
-
-				case 3 :
-					constantInteger(in, poolIndex);
+				}
+				case CONSTANT_NameAndType : {
+					NameAndTypeInfo info = constantPool.entry(i);
+					referTo(constantPool.utf8(info.descriptor_index), 0);
 					break;
-
-				case 4 :
-					constantFloat(in, poolIndex);
+				}
+				case CONSTANT_MethodType : {
+					MethodTypeInfo info = constantPool.entry(i);
+					referTo(constantPool.utf8(info.descriptor_index), 0);
 					break;
-
-				// For some insane optimization reason are
-				// the long and the double two entries in the
-				// constant pool. See 4.4.5
-				case 5 :
-					constantLong(in, poolIndex);
-					poolIndex++;
-					break;
-
-				case 6 :
-					constantDouble(in, poolIndex);
-					poolIndex++;
-					break;
-
-				case 7 :
-					constantClass(in, poolIndex);
-					break;
-
-				case 8 :
-					constantString(in, poolIndex);
-					break;
-
-				case 10 : // Method ref
-				case 11 : // Interface Method ref
-					methodRef(in, poolIndex);
-					break;
-
-				// Name and Type
-				case 12 :
-					nameAndType(in, poolIndex, tag);
-					break;
-
-				// We get the skip count for each record type
-				// from the SkipTable. This will also automatically
-				// abort when
+				}
 				default :
-					if (tag == 2)
-						throw new IOException("Invalid tag " + tag);
-					in.skipBytes(SkipTable[tag]);
 					break;
 			}
 		}
 
-		pool(pool, intPool);
-
-		// All name& type and class constant records contain descriptors we must
-		// treat
-		// as references, though not API
-
-		for (Object o : pool) {
-			if (o == null)
-				continue;
-
-			if (o instanceof Assoc && ((Assoc) o).tag == 12) {
-				referTo(((Assoc) o).b, 0); // Descriptor
-			} else if (o instanceof ClassConstant) {
-				String binaryClassName = (String) pool[((ClassConstant) o).cname];
-				TypeRef typeRef = analyzer.getTypeRef(binaryClassName);
-				referTo(typeRef, 0);
-			}
+		for (FieldInfo fieldInfo : classFile.fields) {
+			referTo(fieldInfo.descriptor, fieldInfo.access);
+			processAttributes(fieldInfo.attributes, elementType(fieldInfo), fieldInfo.access);
 		}
 
 		/*
-		 * Parse after the constant pool, code thanks to Hans Christian
-		 * Falkenberg
+		 * We crawl the code to find the ldc(_w) <string constant> invokestatic
+		 * Class.forName if so, calculate the method ref index so we can do this
+		 * efficiently
 		 */
+		forName = findMethodReference("java/lang/Class", "forName", "(Ljava/lang/String;)Ljava/lang/Class;");
+		class$ = findMethodReference(classDef.getType()
+			.getBinary(), "class$", "(Ljava/lang/String;)Ljava/lang/Class;");
 
-		accessx = in.readUnsignedShort(); // access
-		if (Modifier.isPublic(accessx))
-			api = new HashSet<PackageRef>();
+		for (MethodInfo methodInfo : classFile.methods) {
+			referTo(methodInfo.descriptor, methodInfo.access);
+			ElementType elementType = elementType(methodInfo);
+			if ((elementType == ElementType.CONSTRUCTOR) && Modifier.isPublic(methodInfo.access)
+				&& methodInfo.descriptor.equals("()V")) {
+				hasDefaultConstructor = true;
+			}
+			processAttributes(methodInfo.attributes, elementType, methodInfo.access);
+		}
 
-		int this_class = in.readUnsignedShort();
-		className = analyzer.getTypeRef((String) pool[intPool[this_class]]);
-		referTo(className, Modifier.PUBLIC);
+		processAttributes(classFile.attributes, elementType(classFile), classFile.access);
 
+		return xref;
+	}
+
+	private void visitClassFile(ClassDataCollector cd) throws Exception {
+		if (cd == null) {
+			return;
+		}
+		logger.debug("visitClassFile(): path={} resource={}", path, resource);
+
+		if (!cd.classStart(this)) {
+			return;
+		}
 		try {
-
-			if (cd != null) {
-				if (!cd.classStart(accessx, className))
-					return null;
+			cd.version(classFile.minor_version, classFile.major_version);
+			if (superClass != null) {
+				cd.extendsClass(superClass);
+			}
+			if (interfaces != null) {
+				cd.implementsInterfaces(interfaces);
 			}
 
-			int super_class = in.readUnsignedShort();
-			String superName = (String) pool[intPool[super_class]];
-			if (superName != null) {
-				zuper = analyzer.getTypeRef(superName);
+			referred.forEach((typeRef, access) -> {
+				cd.addReference(typeRef);
+				cd.referTo(typeRef, access.intValue());
+			});
+
+			for (FieldInfo fieldInfo : classFile.fields) {
+				FieldDef fieldDef = new FieldDef(fieldInfo);
+				cd.field(fieldDef);
+				visitAttributes(cd, fieldDef);
 			}
 
-			if (zuper != null) {
-				referTo(zuper, accessx);
-				if (cd != null)
-					cd.extendsClass(zuper);
+			for (MethodInfo methodInfo : classFile.methods) {
+				MethodDef methodDef = new MethodDef(methodInfo);
+				cd.method(methodDef);
+				visitAttributes(cd, methodDef);
 			}
 
-			int interfacesCount = in.readUnsignedShort();
-			if (interfacesCount > 0) {
-				interfaces = new TypeRef[interfacesCount];
-				for (int i = 0; i < interfacesCount; i++) {
-					interfaces[i] = analyzer.getTypeRef((String) pool[intPool[in.readUnsignedShort()]]);
-					referTo(interfaces[i], accessx);
-				}
-				if (cd != null)
-					cd.implementsInterfaces(interfaces);
-			}
+			cd.memberEnd();
 
-			int fieldsCount = in.readUnsignedShort();
-			for (int i = 0; i < fieldsCount; i++) {
-				int access_flags = in.readUnsignedShort(); // skip access flags
-				int name_index = in.readUnsignedShort();
-				int descriptor_index = in.readUnsignedShort();
-
-				// Java prior to 1.5 used a weird
-				// static variable to hold the com.X.class
-				// result construct. If it did not find it
-				// it would create a variable class$com$X
-				// that would be used to hold the class
-				// object gotten with Class.forName ...
-				// Stupidly, they did not actively use the
-				// class name for the field type, so bnd
-				// would not see a reference. We detect
-				// this case and add an artificial descriptor
-				String name = pool[name_index].toString(); // name_index
-				if (name.startsWith("class$")) {
-					crawl = true;
-				}
-				if (cd != null)
-					cd.field(last = new FieldDef(access_flags, name, pool[descriptor_index].toString()));
-
-				referTo(descriptor_index, access_flags);
-				doAttributes(in, ElementType.FIELD, false, access_flags);
-			}
-
-			//
-			// Check if we have to crawl the code to find
-			// the ldc(_w) <string constant> invokestatic Class.forName
-			// if so, calculate the method ref index so we
-			// can do this efficiently
-			//
-			if (crawl) {
-				forName = findMethodReference("java/lang/Class", "forName", "(Ljava/lang/String;)Ljava/lang/Class;");
-				class$ = findMethodReference(className.getBinary(), "class$", "(Ljava/lang/String;)Ljava/lang/Class;");
-			} else if (major == 48) {
-				forName = findMethodReference("java/lang/Class", "forName", "(Ljava/lang/String;)Ljava/lang/Class;");
-				if (forName > 0) {
-					crawl = true;
-					class$ = findMethodReference(className.getBinary(), "class$",
-							"(Ljava/lang/String;)Ljava/lang/Class;");
-				}
-			}
-
-			// There are some serious changes in the
-			// class file format. So we do not do any crawling
-			// it has also become less important
-			if (major >= JAVA.OpenJDK7.major)
-				crawl = false;
-
-			//
-			// Handle the methods
-			//
-			int methodCount = in.readUnsignedShort();
-			for (int i = 0; i < methodCount; i++) {
-				int access_flags = in.readUnsignedShort();
-				int name_index = in.readUnsignedShort();
-				int descriptor_index = in.readUnsignedShort();
-				String name = pool[name_index].toString();
-				String descriptor = pool[descriptor_index].toString();
-				if (cd != null) {
-					MethodDef mdef = new MethodDef(access_flags, name, descriptor);
-					last = mdef;
-					cd.method(mdef);
-				}
-				referTo(descriptor_index, access_flags);
-
-				if ("<init>".equals(name)) {
-					doAttributes(in, ElementType.CONSTRUCTOR, crawl, access_flags);
-				} else {
-					doAttributes(in, ElementType.METHOD, crawl, access_flags);
-				}
-			}
-			if (cd != null)
-				cd.memberEnd();
-
-			doAttributes(in, ElementType.TYPE, false, accessx);
-
-			//
-			// Parse all the descriptors we found
-			//
-
-			Set<TypeRef> xref = this.xref;
-			reset();
-			return xref;
-		}
-		finally {
-			if (cd != null)
-				cd.classEnd();
+			visitAttributes(cd, classDef);
+		} finally {
+			cd.classEnd();
 		}
 	}
 
-	private void constantFloat(DataInputStream in, int poolIndex) throws IOException {
-		if (cd != null)
-			pool[poolIndex] = in.readFloat(); // ALU
-		else
-			in.skipBytes(4);
+	public Stream<FieldDef> fields() {
+		return Arrays.stream(classFile.fields)
+			.map(FieldDef::new);
 	}
 
-	private void constantInteger(DataInputStream in, int poolIndex) throws IOException {
-		intPool[poolIndex] = in.readInt();
-		if (cd != null)
-			pool[poolIndex] = intPool[poolIndex];
-	}
-
-	protected void pool(@SuppressWarnings("unused")
-	Object[] pool, @SuppressWarnings("unused")
-	int[] intPool) {}
-
-	/**
-	 * @param in
-	 * @param poolIndex
-	 * @param tag
-	 * @throws IOException
-	 */
-	protected void nameAndType(DataInputStream in, int poolIndex, byte tag) throws IOException {
-		int name_index = in.readUnsignedShort();
-		int descriptor_index = in.readUnsignedShort();
-		pool[poolIndex] = new Assoc(tag, name_index, descriptor_index);
-	}
-
-	/**
-	 * @param in
-	 * @param poolIndex
-	 * @param tag
-	 * @throws IOException
-	 */
-	private void methodRef(DataInputStream in, int poolIndex) throws IOException {
-		int class_index = in.readUnsignedShort();
-		int name_and_type_index = in.readUnsignedShort();
-		pool[poolIndex] = new Assoc((byte) 10, class_index, name_and_type_index);
-	}
-
-	/**
-	 * @param in
-	 * @param poolIndex
-	 * @throws IOException
-	 */
-	private void constantString(DataInputStream in, int poolIndex) throws IOException {
-		int string_index = in.readUnsignedShort();
-		intPool[poolIndex] = string_index;
-	}
-
-	/**
-	 * @param in
-	 * @param poolIndex
-	 * @throws IOException
-	 */
-	protected void constantClass(DataInputStream in, int poolIndex) throws IOException {
-		int class_index = in.readUnsignedShort();
-		intPool[poolIndex] = class_index;
-		ClassConstant c = new ClassConstant(class_index);
-		pool[poolIndex] = c;
-	}
-
-	/**
-	 * @param in
-	 * @throws IOException
-	 */
-	protected void constantDouble(DataInputStream in, int poolIndex) throws IOException {
-		if (cd != null)
-			pool[poolIndex] = in.readDouble();
-		else
-			in.skipBytes(8);
-	}
-
-	/**
-	 * @param in
-	 * @throws IOException
-	 */
-	protected void constantLong(DataInputStream in, int poolIndex) throws IOException {
-		if (cd != null) {
-			pool[poolIndex] = in.readLong();
-		} else
-			in.skipBytes(8);
-	}
-
-	/**
-	 * @param in
-	 * @param poolIndex
-	 * @throws IOException
-	 */
-	protected void constantUtf8(DataInputStream in, int poolIndex) throws IOException {
-		// CONSTANT_Utf8
-
-		String name = in.readUTF();
-		pool[poolIndex] = name;
+	public Stream<MethodDef> methods() {
+		return Arrays.stream(classFile.methods)
+			.map(MethodDef::new);
 	}
 
 	/**
@@ -782,659 +936,708 @@ public class Clazz {
 	 * @return index in constant pool
 	 */
 	private int findMethodReference(String clazz, String methodname, String descriptor) {
-		for (int i = 1; i < pool.length; i++) {
-			if (pool[i] instanceof Assoc) {
-				Assoc methodref = (Assoc) pool[i];
-				if (methodref.tag == 10) {
-					// Method ref
-					int class_index = methodref.a;
-					int class_name_index = intPool[class_index];
-					if (clazz.equals(pool[class_name_index])) {
-						int name_and_type_index = methodref.b;
-						Assoc name_and_type = (Assoc) pool[name_and_type_index];
-						if (name_and_type.tag == 12) {
-							// Name and Type
-							int name_index = name_and_type.a;
-							int type_index = name_and_type.b;
-							if (methodname.equals(pool[name_index])) {
-								if (descriptor.equals(pool[type_index])) {
-									return i;
-								}
-							}
+		int constant_pool_count = constantPool.size();
+		for (int i = 1; i < constant_pool_count; i++) {
+			switch (constantPool.tag(i)) {
+				case CONSTANT_Methodref :
+				case CONSTANT_InterfaceMethodref :
+					AbstractRefInfo refInfo = constantPool.entry(i);
+					if (clazz.equals(constantPool.className(refInfo.class_index))) {
+						NameAndTypeInfo nameAndTypeInfo = constantPool.entry(refInfo.name_and_type_index);
+						if (methodname.equals(constantPool.utf8(nameAndTypeInfo.name_index))
+							&& descriptor.equals(constantPool.utf8(nameAndTypeInfo.descriptor_index))) {
+							return i;
 						}
 					}
-				}
 			}
 		}
 		return -1;
 	}
 
 	/**
-	 * Called for each attribute in the class, field, or method.
-	 * 
-	 * @param in
-	 *            The stream
-	 * @param access_flags
-	 * @throws Exception
+	 * Called for the attributes in the class, field, method or Code attribute.
 	 */
-	private void doAttributes(DataInputStream in, ElementType member, boolean crawl, int access_flags) throws Exception {
-		int attributesCount = in.readUnsignedShort();
-		for (int j = 0; j < attributesCount; j++) {
-			// skip name CONSTANT_Utf8 pointer
-			doAttribute(in, member, crawl, access_flags);
-		}
-	}
-
-	/**
-	 * Process a single attribute, if not recognized, skip it.
-	 * 
-	 * @param in
-	 *            the data stream
-	 * @param access_flags
-	 * @throws Exception
-	 */
-	private void doAttribute(DataInputStream in, ElementType member, boolean crawl, int access_flags) throws Exception {
-		int attribute_name_index = in.readUnsignedShort();
-		String attributeName = (String) pool[attribute_name_index];
-		long attribute_length = in.readInt();
-		attribute_length &= 0xFFFFFFFF;
-		if ("Deprecated".equals(attributeName)) {
-			if (cd != null)
-				cd.deprecated();
-		} else if ("RuntimeVisibleAnnotations".equals(attributeName))
-			doAnnotations(in, member, RetentionPolicy.RUNTIME, access_flags);
-		else if ("RuntimeVisibleParameterAnnotations".equals(attributeName))
-			doParameterAnnotations(in, member, RetentionPolicy.RUNTIME, access_flags);
-		else if ("RuntimeInvisibleAnnotations".equals(attributeName))
-			doAnnotations(in, member, RetentionPolicy.CLASS, access_flags);
-		else if ("RuntimeInvisibleParameterAnnotations".equals(attributeName))
-			doParameterAnnotations(in, member, RetentionPolicy.CLASS, access_flags);
-		else if ("InnerClasses".equals(attributeName))
-			doInnerClasses(in);
-		else if ("EnclosingMethod".equals(attributeName))
-			doEnclosingMethod(in);
-		else if ("SourceFile".equals(attributeName))
-			doSourceFile(in);
-		else if ("Code".equals(attributeName) && crawl)
-			doCode(in);
-		else if ("Signature".equals(attributeName))
-			doSignature(in, member, access_flags);
-		else if ("ConstantValue".equals(attributeName))
-			doConstantValue(in);
-		else if ("AnnotationDefault".equals(attributeName))
-			doElementValue(in, member, RetentionPolicy.RUNTIME, cd!=null, access_flags);
-		else if ("Exceptions".equals(attributeName))
-			doExceptions(in, access_flags);
-		else {
-			if (attribute_length > 0x7FFFFFFF) {
-				throw new IllegalArgumentException("Attribute > 2Gb");
-			}
-			in.skipBytes((int) attribute_length);
-		}
-	}
-
-	/**
-	 * <pre>
-	 * EnclosingMethod_attribute { 
-	 * 	u2 attribute_name_index; 
-	 * 	u4 attribute_length; 
-	 * 	u2 class_index
-	 * 	u2 method_index;
-	 * }
-	 * </pre>
-	 * 
-	 * @param in
-	 * @throws IOException
-	 */
-	private void doEnclosingMethod(DataInputStream in) throws IOException {
-		int cIndex = in.readShort();
-		int mIndex = in.readShort();
-
-		if (cd != null) {
-			int nameIndex = intPool[cIndex];
-			TypeRef cName = analyzer.getTypeRef((String) pool[nameIndex]);
-
-			String mName = null;
-			String mDescriptor = null;
-
-			if (mIndex != 0) {
-				Assoc nameAndType = (Assoc) pool[mIndex];
-				mName = (String) pool[nameAndType.a];
-				mDescriptor = (String) pool[nameAndType.b];
-			}
-			cd.enclosingMethod(cName, mName, mDescriptor);
-		}
-	}
-
-	/**
-	 * <pre>
-	 * InnerClasses_attribute {
-	 * 	u2 attribute_name_index; 
-	 * 	u4 attribute_length; 
-	 * 	u2 number_of_classes; {	
-	 * 		u2 inner_class_info_index;
-	 * 		u2 outer_class_info_index; 
-	 * 		u2 inner_name_index; 
-	 * 		u2 inner_class_access_flags;
-	 * 	} classes[number_of_classes];
-	 * }
-	 * </pre>
-	 * 
-	 * @param in
-	 * @throws Exception
-	 */
-	private void doInnerClasses(DataInputStream in) throws Exception {
-		int number_of_classes = in.readShort();
-		for (int i = 0; i < number_of_classes; i++) {
-			int inner_class_info_index = in.readShort();
-			int outer_class_info_index = in.readShort();
-			int inner_name_index = in.readShort();
-			int inner_class_access_flags = in.readShort() & 0xFFFF;
-
-			if (cd != null) {
-				TypeRef innerClass = null;
-				TypeRef outerClass = null;
-				String innerName = null;
-
-				if (inner_class_info_index != 0) {
-					int nameIndex = intPool[inner_class_info_index];
-					innerClass = analyzer.getTypeRef((String) pool[nameIndex]);
-				}
-
-				if (outer_class_info_index != 0) {
-					int nameIndex = intPool[outer_class_info_index];
-					outerClass = analyzer.getTypeRef((String) pool[nameIndex]);
-				}
-
-				if (inner_name_index != 0)
-					innerName = (String) pool[inner_name_index];
-
-				cd.innerClass(innerClass, outerClass, innerName, inner_class_access_flags);
-			}
-		}
-	}
-
-	/**
-	 * Handle a signature
-	 * 
-	 * <pre>
-	 * Signature_attribute { 
-	 *     u2 attribute_name_index; 
-	 *     u4 attribute_length; 
-	 *     u2 signature_index; 
-	 *     }
-	 * </pre>
-	 * 
-	 * @param member
-	 * @param access_flags
-	 */
-
-	void doSignature(DataInputStream in, ElementType member, int access_flags) throws IOException {
-		int signature_index = in.readUnsignedShort();
-		String signature = (String) pool[signature_index];
-
-		parseDescriptor(signature, access_flags);
-
-		if (last != null)
-			last.signature = signature;
-
-		if (cd != null)
-			cd.signature(signature);
-	}
-
-	/**
-	 * Handle a constant value call the data collector with it
-	 */
-	void doConstantValue(DataInputStream in) throws IOException {
-		int constantValue_index = in.readUnsignedShort();
-		if (cd == null)
-			return;
-
-		Object object = pool[constantValue_index];
-		if (object == null)
-			object = pool[intPool[constantValue_index]];
-
-		last.constant = object;
-		cd.constant(object);
-	}
-
-	void doExceptions(DataInputStream in, int access_flags) throws IOException {
-		int exception_count = in.readUnsignedShort();
-		for (int i = 0; i < exception_count; i++) {
-			int index = in.readUnsignedShort();
-			if (api != null && (Modifier.isPublic(access_flags) || Modifier.isProtected(access_flags))) {
-				ClassConstant cc = (ClassConstant) pool[index];
-				String descr = (String) pool[cc.cname];
-
-				TypeRef clazz = analyzer.getTypeRef(descr);
-				referTo(clazz, access_flags);
-			}
-		}
-	}
-
-	/**
-	 * <pre>
-	 * Code_attribute {
-	 * 		u2 attribute_name_index;
-	 * 		u4 attribute_length;
-	 * 		u2 max_stack;
-	 * 		u2 max_locals;
-	 * 		u4 code_length;
-	 * 		u1 code[code_length];
-	 * 		u2 exception_table_length;
-	 * 		{    	u2 start_pc;
-	 * 		      	u2 end_pc;
-	 * 		      	u2  handler_pc;
-	 * 		      	u2  catch_type;
-	 * 		}	exception_table[exception_table_length];
-	 * 		u2 attributes_count;
-	 * 		attribute_info attributes[attributes_count];
-	 * 	}
-	 * </pre>
-	 * 
-	 * @param in
-	 * @param pool
-	 * @throws Exception
-	 */
-	private void doCode(DataInputStream in) throws Exception {
-		/* int max_stack = */in.readUnsignedShort();
-		/* int max_locals = */in.readUnsignedShort();
-		int code_length = in.readInt();
-		byte code[] = new byte[code_length];
-		in.readFully(code);
-		crawl(code);
-		int exception_table_length = in.readUnsignedShort();
-		in.skipBytes(exception_table_length * 8);
-		doAttributes(in, ElementType.METHOD, false, 0);
-	}
-
-	/**
-	 * We must find Class.forName references ...
-	 * 
-	 * @param code
-	 */
-	protected void crawl(byte[] code) {
-		ByteBuffer bb = ByteBuffer.wrap(code);
-		bb.order(ByteOrder.BIG_ENDIAN);
-		int lastReference = -1;
-
-		while (bb.remaining() > 0) {
-			int instruction = 0xFF & bb.get();
-			switch (instruction) {
-				case OpCodes.ldc :
-					lastReference = 0xFF & bb.get();
+	private void processAttributes(Attribute[] attributes, ElementType elementType, int access_flags) {
+		for (Attribute attribute : attributes) {
+			switch (attribute.name()) {
+				case RuntimeVisibleAnnotationsAttribute.NAME :
+					processAnnotations((AnnotationsAttribute) attribute, elementType, RetentionPolicy.RUNTIME,
+						access_flags);
 					break;
-
-				case OpCodes.ldc_w :
-					lastReference = 0xFFFF & bb.getShort();
+				case RuntimeInvisibleAnnotationsAttribute.NAME :
+					processAnnotations((AnnotationsAttribute) attribute, elementType, RetentionPolicy.CLASS,
+						access_flags);
 					break;
-
-				case OpCodes.invokespecial : {
-					int mref = 0xFFFF & bb.getShort();
-					if (cd != null)
-						getMethodDef(0, mref);
+				case RuntimeVisibleParameterAnnotationsAttribute.NAME :
+					processParameterAnnotations((ParameterAnnotationsAttribute) attribute, ElementType.PARAMETER,
+						RetentionPolicy.RUNTIME, access_flags);
 					break;
-				}
-
-				case OpCodes.invokevirtual : {
-					int mref = 0xFFFF & bb.getShort();
-					if (cd != null)
-						getMethodDef(0, mref);
+				case RuntimeInvisibleParameterAnnotationsAttribute.NAME :
+					processParameterAnnotations((ParameterAnnotationsAttribute) attribute, ElementType.PARAMETER,
+						RetentionPolicy.CLASS, access_flags);
 					break;
-				}
-
-				case OpCodes.invokeinterface : {
-					int mref = 0xFFFF & bb.getShort();
-					if (cd != null)
-						getMethodDef(0, mref);
+				case RuntimeVisibleTypeAnnotationsAttribute.NAME :
+					processTypeAnnotations((TypeAnnotationsAttribute) attribute, ElementType.TYPE_USE,
+						RetentionPolicy.RUNTIME, access_flags);
 					break;
-				}
-
-				case OpCodes.invokestatic : {
-					int methodref = 0xFFFF & bb.getShort();
-					if (cd != null)
-						getMethodDef(0, methodref);
-
-					if ((methodref == forName || methodref == class$) && lastReference != -1
-							&& pool[intPool[lastReference]] instanceof String) {
-						String fqn = (String) pool[intPool[lastReference]];
-						if (!fqn.equals("class") && fqn.indexOf('.') > 0) {
-							TypeRef clazz = analyzer.getTypeRefFromFQN(fqn);
-							referTo(clazz, 0);
-						}
-						lastReference = -1;
-					}
+				case RuntimeInvisibleTypeAnnotationsAttribute.NAME :
+					processTypeAnnotations((TypeAnnotationsAttribute) attribute, ElementType.TYPE_USE,
+						RetentionPolicy.CLASS, access_flags);
 					break;
-				}
-
-				case OpCodes.tableswitch :
-					// Skip to place divisible by 4
-					while ((bb.position() & 0x3) != 0)
-						bb.get();
-					/* int deflt = */
-					bb.getInt();
-					int low = bb.getInt();
-					int high = bb.getInt();
-					try {
-						bb.position(bb.position() + (high - low + 1) * 4);
-					}
-					catch (Exception e) {
-						// TODO Auto-generated catch block
-						e.printStackTrace();
-					}
-					lastReference = -1;
+				case EnclosingMethodAttribute.NAME :
+					processEnclosingMethod((EnclosingMethodAttribute) attribute);
 					break;
-
-				case OpCodes.lookupswitch :
-					// Skip to place divisible by 4
-					while ((bb.position() & 0x3) != 0)
-						bb.get();
-					/* deflt = */
-					bb.getInt();
-					int npairs = bb.getInt();
-					bb.position(bb.position() + npairs * 8);
-					lastReference = -1;
+				case CodeAttribute.NAME :
+					processCode((CodeAttribute) attribute, elementType);
 					break;
-
+				case SignatureAttribute.NAME :
+					processSignature((SignatureAttribute) attribute, elementType, access_flags);
+					break;
+				case AnnotationDefaultAttribute.NAME :
+					processAnnotationDefault((AnnotationDefaultAttribute) attribute, elementType, access_flags);
+					break;
+				case ExceptionsAttribute.NAME :
+					processExceptions((ExceptionsAttribute) attribute, access_flags);
+					break;
+				case BootstrapMethodsAttribute.NAME :
+					processBootstrapMethods((BootstrapMethodsAttribute) attribute);
+					break;
+				case StackMapTableAttribute.NAME :
+					processStackMapTable((StackMapTableAttribute) attribute);
+					break;
 				default :
+					break;
+			}
+		}
+	}
+
+	/**
+	 * Called for the attributes in the class, field, or method.
+	 */
+	private void visitAttributes(ClassDataCollector cd, ElementDef elementDef) throws Exception {
+		int access_flags = elementDef.getAccess();
+		ElementType elementType = elementDef.elementType();
+		if (elementDef.isDeprecated()) {
+			cd.deprecated();
+		}
+		for (Attribute attribute : elementDef.attributes) {
+			switch (attribute.name()) {
+				case RuntimeVisibleAnnotationsAttribute.NAME :
+					visitAnnotations(cd, (AnnotationsAttribute) attribute, elementType, RetentionPolicy.RUNTIME,
+						access_flags);
+					break;
+				case RuntimeInvisibleAnnotationsAttribute.NAME :
+					visitAnnotations(cd, (AnnotationsAttribute) attribute, elementType, RetentionPolicy.CLASS,
+						access_flags);
+					break;
+				case RuntimeVisibleParameterAnnotationsAttribute.NAME :
+					visitParameterAnnotations(cd, (ParameterAnnotationsAttribute) attribute, ElementType.PARAMETER,
+						RetentionPolicy.RUNTIME, access_flags);
+					break;
+				case RuntimeInvisibleParameterAnnotationsAttribute.NAME :
+					visitParameterAnnotations(cd, (ParameterAnnotationsAttribute) attribute, ElementType.PARAMETER,
+						RetentionPolicy.CLASS, access_flags);
+					break;
+				case RuntimeVisibleTypeAnnotationsAttribute.NAME :
+					visitTypeAnnotations(cd, (TypeAnnotationsAttribute) attribute, ElementType.TYPE_USE,
+						RetentionPolicy.RUNTIME, access_flags);
+					break;
+				case RuntimeInvisibleTypeAnnotationsAttribute.NAME :
+					visitTypeAnnotations(cd, (TypeAnnotationsAttribute) attribute, ElementType.TYPE_USE,
+						RetentionPolicy.CLASS, access_flags);
+					break;
+				case InnerClassesAttribute.NAME :
+					visitInnerClasses(cd, (InnerClassesAttribute) attribute);
+					break;
+				case EnclosingMethodAttribute.NAME :
+					visitEnclosingMethod(cd, (EnclosingMethodAttribute) attribute);
+					break;
+				case CodeAttribute.NAME :
+					visitCode(cd, (CodeAttribute) attribute, elementType);
+					break;
+				case SignatureAttribute.NAME :
+					visitSignature(cd, (SignatureAttribute) attribute);
+					break;
+				case ConstantValueAttribute.NAME :
+					visitConstantValue(cd, (ConstantValueAttribute) attribute);
+					break;
+				case AnnotationDefaultAttribute.NAME :
+					visitAnnotationDefault(cd, (AnnotationDefaultAttribute) attribute, elementDef);
+					break;
+				case MethodParametersAttribute.NAME :
+					visitMethodParameters(cd, (MethodParametersAttribute) attribute, elementDef);
+					break;
+				default :
+					break;
+			}
+		}
+	}
+
+	private void processEnclosingMethod(EnclosingMethodAttribute attribute) {
+		classConstRef(attribute.class_name);
+	}
+
+	private void visitEnclosingMethod(ClassDataCollector cd, EnclosingMethodAttribute attribute) {
+		TypeRef cName = analyzer.getTypeRef(attribute.class_name);
+		cd.enclosingMethod(cName, attribute.method_name, attribute.method_descriptor);
+	}
+
+	private void visitInnerClasses(ClassDataCollector cd, InnerClassesAttribute attribute) throws Exception {
+		for (InnerClass innerClassInfo : attribute.classes) {
+			TypeRef innerClass = analyzer.getTypeRef(innerClassInfo.inner_class);
+			TypeRef outerClass;
+			String outerClassName = innerClassInfo.outer_class;
+			if (outerClassName != null) {
+				outerClass = analyzer.getTypeRef(outerClassName);
+			} else {
+				outerClass = null;
+			}
+
+			cd.innerClass(innerClass, outerClass, innerClassInfo.inner_name, innerClassInfo.inner_access);
+		}
+	}
+
+	private void processSignature(SignatureAttribute attribute, ElementType elementType, int access_flags) {
+		String signature = attribute.signature;
+		Signature sig;
+		switch (elementType) {
+			case ANNOTATION_TYPE :
+			case TYPE :
+			case PACKAGE :
+				sig = analyzer.getClassSignature(signature);
+				break;
+			case FIELD :
+				sig = analyzer.getFieldSignature(signature);
+				break;
+			case CONSTRUCTOR :
+			case METHOD :
+				sig = analyzer.getMethodSignature(signature);
+				break;
+			default :
+				throw new IllegalArgumentException(
+					"Signature \"" + signature + "\" found for unknown element type: " + elementType);
+		}
+		Set<String> binaryRefs = sig.erasedBinaryReferences();
+		for (String binary : binaryRefs) {
+			TypeRef ref = analyzer.getTypeRef(binary);
+			referTo(ref, access_flags);
+		}
+	}
+
+	private void visitSignature(ClassDataCollector cd, SignatureAttribute attribute) {
+		String signature = attribute.signature;
+		cd.signature(signature);
+	}
+
+	private void processAnnotationDefault(AnnotationDefaultAttribute attribute, ElementType elementType,
+		int access_flags) {
+		Object value = attribute.value;
+		processElementValue(value, elementType, RetentionPolicy.RUNTIME, access_flags);
+	}
+
+	private void visitAnnotationDefault(ClassDataCollector cd, AnnotationDefaultAttribute attribute,
+		ElementDef elementDef) {
+		MethodDef methodDef = (MethodDef) elementDef;
+		Object value = annotationDefault(attribute, methodDef.getAccess());
+		cd.annotationDefault(methodDef, value);
+	}
+
+	static ElementType elementType(FieldInfo fieldInfo) {
+		return ElementType.FIELD;
+	}
+
+	static ElementType elementType(MethodInfo methodInfo) {
+		return methodInfo.name.equals("<init>") ? ElementType.CONSTRUCTOR : ElementType.METHOD;
+	}
+
+	static ElementType elementType(ClassFile classFile) {
+		if (isAnnotation(classFile.access)) {
+			return ElementType.ANNOTATION_TYPE;
+		}
+		if (isModule(classFile.access)) {
+			return ElementType.MODULE;
+		}
+		return classFile.this_class.endsWith("/package-info") ? ElementType.PACKAGE : ElementType.TYPE;
+	}
+
+	Object annotationDefault(AnnotationDefaultAttribute attribute, int access_flags) {
+		try {
+			return newElementValue(attribute.value, ElementType.METHOD, RetentionPolicy.RUNTIME, access_flags);
+		} catch (Exception e) {
+			throw Exceptions.duck(e);
+		}
+	}
+
+	private void visitConstantValue(ClassDataCollector cd, ConstantValueAttribute attribute) {
+		Object value = attribute.value;
+		cd.constant(value);
+	}
+
+	private void processExceptions(ExceptionsAttribute attribute, int access_flags) {
+		for (String exception : attribute.exceptions) {
+			TypeRef clazz = analyzer.getTypeRef(exception);
+			referTo(clazz, access_flags);
+		}
+	}
+
+	private void visitMethodParameters(ClassDataCollector cd, MethodParametersAttribute attribute,
+		ElementDef elementDef) {
+		MethodDef method = (MethodDef) elementDef;
+		cd.methodParameters(method, MethodParameter.parameters(attribute));
+	}
+
+	private void processCode(CodeAttribute attribute, ElementType elementType) {
+		ByteBuffer code = attribute.code.duplicate();
+		code.rewind();
+		int lastReference = -1;
+		while (code.hasRemaining()) {
+			int instruction = Byte.toUnsignedInt(code.get());
+			switch (instruction) {
+				case OpCodes.ldc : {
+					lastReference = Byte.toUnsignedInt(code.get());
+					classConstRef(lastReference);
+					break;
+				}
+				case OpCodes.ldc_w : {
+					lastReference = Short.toUnsignedInt(code.getShort());
+					classConstRef(lastReference);
+					break;
+				}
+				case OpCodes.anewarray :
+				case OpCodes.checkcast :
+				case OpCodes.instanceof_ :
+				case OpCodes.new_ : {
+					int class_index = Short.toUnsignedInt(code.getShort());
+					classConstRef(class_index);
 					lastReference = -1;
-					bb.position(bb.position() + OpCodes.OFFSETS[instruction]);
+					break;
+				}
+				case OpCodes.multianewarray : {
+					int class_index = Short.toUnsignedInt(code.getShort());
+					classConstRef(class_index);
+					code.get();
+					lastReference = -1;
+					break;
+				}
+				case OpCodes.invokestatic : {
+					int method_ref_index = Short.toUnsignedInt(code.getShort());
+					if ((method_ref_index == forName || method_ref_index == class$) && lastReference != -1) {
+						if (constantPool.tag(lastReference) == CONSTANT_String) {
+							String fqn = constantPool.string(lastReference);
+							if (!fqn.equals("class") && fqn.indexOf('.') > 0) {
+								TypeRef typeRef = analyzer.getTypeRefFromFQN(fqn);
+								referTo(typeRef, 0);
+							}
+						}
+					}
+					lastReference = -1;
+					break;
+				}
+				case OpCodes.wide : {
+					int opcode = Byte.toUnsignedInt(code.get());
+					code.position(code.position() + (opcode == OpCodes.iinc ? 4 : 2));
+					lastReference = -1;
+					break;
+				}
+				case OpCodes.tableswitch : {
+					// Skip to place divisible by 4
+					int rem = code.position() % 4;
+					if (rem != 0) {
+						code.position(code.position() + 4 - rem);
+					}
+					int deflt = code.getInt();
+					int low = code.getInt();
+					int high = code.getInt();
+					code.position(code.position() + (high - low + 1) * 4);
+					lastReference = -1;
+					break;
+				}
+				case OpCodes.lookupswitch : {
+					// Skip to place divisible by 4
+					int rem = code.position() % 4;
+					if (rem != 0) {
+						code.position(code.position() + 4 - rem);
+					}
+					int deflt = code.getInt();
+					int npairs = code.getInt();
+					code.position(code.position() + npairs * 8);
+					lastReference = -1;
+					break;
+				}
+				default : {
+					code.position(code.position() + OpCodes.OFFSETS[instruction]);
+					lastReference = -1;
+					break;
+				}
+			}
+		}
+		for (ExceptionHandler exceptionHandler : attribute.exception_table) {
+			classConstRef(exceptionHandler.catch_type);
+		}
+		processAttributes(attribute.attributes, elementType, 0);
+	}
+
+	private void visitCode(ClassDataCollector cd, CodeAttribute attribute, ElementType elementType) throws Exception {
+		ByteBuffer code = attribute.code.duplicate();
+		code.rewind();
+		while (code.hasRemaining()) {
+			int instruction = Byte.toUnsignedInt(code.get());
+			switch (instruction) {
+				case OpCodes.invokespecial : {
+					int method_ref_index = Short.toUnsignedInt(code.getShort());
+					visitReferenceMethod(cd, method_ref_index);
+					break;
+				}
+				case OpCodes.invokevirtual : {
+					int method_ref_index = Short.toUnsignedInt(code.getShort());
+					visitReferenceMethod(cd, method_ref_index);
+					break;
+				}
+				case OpCodes.invokeinterface : {
+					int method_ref_index = Short.toUnsignedInt(code.getShort());
+					visitReferenceMethod(cd, method_ref_index);
+					code.position(code.position() + 2);
+					break;
+				}
+				case OpCodes.invokestatic : {
+					int method_ref_index = Short.toUnsignedInt(code.getShort());
+					visitReferenceMethod(cd, method_ref_index);
+					break;
+				}
+				case OpCodes.wide : {
+					int opcode = Byte.toUnsignedInt(code.get());
+					code.position(code.position() + (opcode == OpCodes.iinc ? 4 : 2));
+					break;
+				}
+				case OpCodes.tableswitch : {
+					// Skip to place divisible by 4
+					int rem = code.position() % 4;
+					if (rem != 0) {
+						code.position(code.position() + 4 - rem);
+					}
+					int deflt = code.getInt();
+					int low = code.getInt();
+					int high = code.getInt();
+					code.position(code.position() + (high - low + 1) * 4);
+					break;
+				}
+				case OpCodes.lookupswitch : {
+					// Skip to place divisible by 4
+					int rem = code.position() % 4;
+					if (rem != 0) {
+						code.position(code.position() + 4 - rem);
+					}
+					int deflt = code.getInt();
+					int npairs = code.getInt();
+					code.position(code.position() + npairs * 8);
+					break;
+				}
+				default : {
+					code.position(code.position() + OpCodes.OFFSETS[instruction]);
+					break;
+				}
+			}
+		}
+
+		CodeDef codeDef = new CodeDef(attribute, elementType);
+		visitAttributes(cd, codeDef);
+	}
+
+	/**
+	 * Called when crawling the byte code and a method reference is found
+	 */
+	private void visitReferenceMethod(ClassDataCollector cd, int method_ref_index) {
+		AbstractRefInfo refInfo = constantPool.entry(method_ref_index);
+		String className = constantPool.className(refInfo.class_index);
+		NameAndTypeInfo nameAndTypeInfo = constantPool.entry(refInfo.name_and_type_index);
+		String method = constantPool.utf8(nameAndTypeInfo.name_index);
+		String descriptor = constantPool.utf8(nameAndTypeInfo.descriptor_index);
+		TypeRef type = analyzer.getTypeRef(className);
+		cd.referenceMethod(0, type, method, descriptor);
+	}
+
+	private void processParameterAnnotations(ParameterAnnotationsAttribute attribute, ElementType elementType,
+		RetentionPolicy policy, int access_flags) {
+		for (ParameterAnnotationInfo parameterAnnotationInfo : attribute.parameter_annotations) {
+			for (AnnotationInfo annotationInfo : parameterAnnotationInfo.annotations) {
+				processAnnotation(annotationInfo, elementType, policy, access_flags);
 			}
 		}
 	}
 
-	private void doSourceFile(DataInputStream in) throws IOException {
-		int sourcefile_index = in.readUnsignedShort();
-		this.sourceFile = pool[sourcefile_index].toString();
-	}
-
-	private void doParameterAnnotations(DataInputStream in, ElementType member, RetentionPolicy policy, int access_flags)
-			throws IOException {
-		int num_parameters = in.readUnsignedByte();
-		for (int p = 0; p < num_parameters; p++) {
-			if (cd != null)
-				cd.parameter(p);
-			doAnnotations(in, member, policy, access_flags);
-		}
-	}
-
-	private void doAnnotations(DataInputStream in, ElementType member, RetentionPolicy policy, int access_flags)
-			throws IOException {
-		int num_annotations = in.readUnsignedShort(); // # of annotations
-		for (int a = 0; a < num_annotations; a++) {
-			if (cd == null)
-				doAnnotation(in, member, policy, false, access_flags);
-			else {
-				Annotation annotion = doAnnotation(in, member, policy, true, access_flags);
-				cd.annotation(annotion);
+	private void visitParameterAnnotations(ClassDataCollector cd, ParameterAnnotationsAttribute attribute,
+		ElementType elementType, RetentionPolicy policy, int access_flags) throws Exception {
+		for (ParameterAnnotationInfo parameterAnnotationInfo : attribute.parameter_annotations) {
+			if (parameterAnnotationInfo.annotations.length > 0) {
+				cd.parameter(parameterAnnotationInfo.parameter);
+				for (AnnotationInfo annotationInfo : parameterAnnotationInfo.annotations) {
+					Annotation annotation = newAnnotation(annotationInfo, elementType, policy, access_flags);
+					cd.annotation(annotation);
+				}
 			}
 		}
 	}
 
-	private Annotation doAnnotation(DataInputStream in, ElementType member, RetentionPolicy policy, boolean collect,
-			int access_flags) throws IOException {
-		int type_index = in.readUnsignedShort();
-		if (annotations == null)
-			annotations = new HashSet<TypeRef>();
+	private void processTypeAnnotations(TypeAnnotationsAttribute attribute, ElementType elementType,
+		RetentionPolicy policy, int access_flags) {
+		for (TypeAnnotationInfo typeAnnotationInfo : attribute.type_annotations) {
+			processAnnotation(typeAnnotationInfo, elementType, policy, access_flags);
+		}
+	}
 
-		TypeRef tr = analyzer.getTypeRef(pool[type_index].toString());
-		annotations.add(tr);
+	private void visitTypeAnnotations(ClassDataCollector cd, TypeAnnotationsAttribute attribute,
+		ElementType elementType, RetentionPolicy policy, int access_flags) throws Exception {
+		for (TypeAnnotationInfo typeAnnotationInfo : attribute.type_annotations) {
+			cd.typeuse(typeAnnotationInfo.target_type, typeAnnotationInfo.target_index, typeAnnotationInfo.target_info,
+				typeAnnotationInfo.type_path);
+			Annotation annotation = newAnnotation(typeAnnotationInfo, elementType, policy, access_flags);
+			cd.annotation(annotation);
+		}
+	}
 
-		TypeRef name = analyzer.getTypeRef((String) pool[type_index]);
+	private void processAnnotations(AnnotationsAttribute attribute, ElementType elementType, RetentionPolicy policy,
+		int access_flags) {
+		for (AnnotationInfo annotationInfo : attribute.annotations) {
+			processAnnotation(annotationInfo, elementType, policy, access_flags);
+		}
+	}
+
+	private void visitAnnotations(ClassDataCollector cd, AnnotationsAttribute attribute, ElementType elementType,
+		RetentionPolicy policy, int access_flags) throws Exception {
+		for (AnnotationInfo annotationInfo : attribute.annotations) {
+			Annotation annotation = newAnnotation(annotationInfo, elementType, policy, access_flags);
+			cd.annotation(annotation);
+		}
+	}
+
+	private void processAnnotation(AnnotationInfo annotationInfo, ElementType elementType, RetentionPolicy policy,
+		int access_flags) {
+		if (annotations == null) {
+			annotations = new HashSet<>();
+		}
+
+		String typeName = annotationInfo.type;
+		TypeRef typeRef = analyzer.getTypeRef(typeName);
+		annotations.add(typeRef);
+
 		if (policy == RetentionPolicy.RUNTIME) {
-			referTo(type_index, 0);
+			referTo(typeRef, 0);
 			hasRuntimeAnnotations = true;
-			if (api != null && (Modifier.isPublic(access_flags) || Modifier.isProtected(access_flags)))
-				api.add(name.getPackageRef());
+			if (api != null && (Modifier.isPublic(access_flags) || Modifier.isProtected(access_flags))) {
+				api.add(typeRef.getPackageRef());
+			}
 		} else {
 			hasClassAnnotations = true;
 		}
-		int num_element_value_pairs = in.readUnsignedShort();
-		Map<String,Object> elements = null;
-		for (int v = 0; v < num_element_value_pairs; v++) {
-			int element_name_index = in.readUnsignedShort();
-			String element = (String) pool[element_name_index];
-			Object value = doElementValue(in, member, policy, collect, access_flags);
-			if (collect) {
-				if (elements == null)
-					elements = new LinkedHashMap<String,Object>();
-				elements.put(element, value);
-			}
+		for (ElementValueInfo elementValueInfo : annotationInfo.values) {
+			processElementValue(elementValueInfo.value, elementType, policy, access_flags);
 		}
-		if (collect)
-			return new Annotation(name, elements, member, policy);
-		return null;
 	}
 
-	private Object doElementValue(DataInputStream in, ElementType member, RetentionPolicy policy, boolean collect,
-			int access_flags) throws IOException {
-		char tag = (char) in.readUnsignedByte();
-		switch (tag) {
-			case 'B' : // Byte
-			case 'C' : // Character
-			case 'I' : // Integer
-			case 'S' : // Short
-				int const_value_index = in.readUnsignedShort();
-				return intPool[const_value_index];
+	Annotation newAnnotation(AnnotationInfo annotationInfo, ElementType elementType, RetentionPolicy policy,
+		int access_flags) {
+		String typeName = annotationInfo.type;
+		TypeRef typeRef = analyzer.getTypeRef(typeName);
+		Map<String, Object> elements = annotationValues(annotationInfo.values, elementType, policy, access_flags);
+		return new Annotation(typeRef, elements, elementType, policy);
+	}
 
-			case 'D' : // Double
-			case 'F' : // Float
-			case 's' : // String
-			case 'J' : // Long
-				const_value_index = in.readUnsignedShort();
-				return pool[const_value_index];
+	ParameterAnnotation newParameterAnnotation(int parameter, AnnotationInfo annotationInfo, ElementType elementType,
+		RetentionPolicy policy, int access_flags) {
+		String typeName = annotationInfo.type;
+		TypeRef typeRef = analyzer.getTypeRef(typeName);
+		Map<String, Object> elements = annotationValues(annotationInfo.values, elementType, policy, access_flags);
+		return new ParameterAnnotation(parameter, typeRef, elements, elementType, policy);
+	}
 
-			case 'Z' : // Boolean
-				const_value_index = in.readUnsignedShort();
-				return pool[const_value_index] == null || pool[const_value_index].equals(0) ? false : true;
+	TypeAnnotation newTypeAnnotation(TypeAnnotationInfo annotationInfo, ElementType elementType, RetentionPolicy policy,
+		int access_flags) {
+		String typeName = annotationInfo.type;
+		TypeRef typeRef = analyzer.getTypeRef(typeName);
+		Map<String, Object> elements = annotationValues(annotationInfo.values, elementType, policy, access_flags);
+		return new TypeAnnotation(annotationInfo.target_type, annotationInfo.target_info, annotationInfo.target_index,
+			annotationInfo.type_path, typeRef, elements, elementType, policy);
+	}
 
-			case 'e' : // enum constant
-				int type_name_index = in.readUnsignedShort();
-				if (policy == RetentionPolicy.RUNTIME) {
-					referTo(type_name_index, 0);
-					if (api != null && (Modifier.isPublic(access_flags) || Modifier.isProtected(access_flags))) {
-						TypeRef name = analyzer.getTypeRef((String) pool[type_name_index]);
-						api.add(name.getPackageRef());
+	private Map<String, Object> annotationValues(ElementValueInfo[] values, ElementType elementType,
+		RetentionPolicy policy, int access_flags) {
+		Map<String, Object> elements = new LinkedHashMap<>();
+		for (ElementValueInfo elementValueInfo : values) {
+			String element = elementValueInfo.name;
+			Object value = newElementValue(elementValueInfo.value, elementType, policy, access_flags);
+			elements.put(element, value);
+		}
+		return elements;
+	}
+
+	private void processElementValue(Object value, ElementType elementType, RetentionPolicy policy, int access_flags) {
+		if (value instanceof EnumConst) {
+			if (policy == RetentionPolicy.RUNTIME) {
+				EnumConst enumConst = (EnumConst) value;
+				TypeRef name = analyzer.getTypeRef(enumConst.type);
+				referTo(name, 0);
+				if (api != null && (Modifier.isPublic(access_flags) || Modifier.isProtected(access_flags))) {
+					api.add(name.getPackageRef());
+				}
+			}
+		} else if (value instanceof ResultConst) {
+			if (policy == RetentionPolicy.RUNTIME) {
+				ResultConst resultConst = (ResultConst) value;
+				TypeRef name = analyzer.getTypeRef(resultConst.descriptor);
+				if (!name.isPrimitive()) {
+					PackageRef packageRef = name.getPackageRef();
+					if (!packageRef.isPrimitivePackage()) {
+						referTo(name, 0);
+						if (api != null && (Modifier.isPublic(access_flags) || Modifier.isProtected(access_flags))) {
+							api.add(packageRef);
+						}
 					}
 				}
-				int const_name_index = in.readUnsignedShort();
-				return pool[const_name_index];
+			}
+		} else if (value instanceof AnnotationInfo) {
+			processAnnotation((AnnotationInfo) value, elementType, policy, access_flags);
+		} else if (value instanceof Object[]) {
+			Object[] array = (Object[]) value;
+			int num_values = array.length;
+			for (int i = 0; i < num_values; i++) {
+				processElementValue(array[i], elementType, policy, access_flags);
+			}
+		}
+	}
 
-			case 'c' : // Class
-				int class_info_index = in.readUnsignedShort();
-				if (policy == RetentionPolicy.RUNTIME) {
-					referTo(class_info_index, 0);
-					if (api != null && (Modifier.isPublic(access_flags) || Modifier.isProtected(access_flags))) {
-						TypeRef name = analyzer.getTypeRef((String) pool[class_info_index]);
-						api.add(name.getPackageRef());
+	private Object newElementValue(Object value, ElementType elementType, RetentionPolicy policy, int access_flags) {
+		if (value instanceof EnumConst) {
+			EnumConst enumConst = (EnumConst) value;
+			return enumConst.name;
+		} else if (value instanceof ResultConst) {
+			ResultConst resultConst = (ResultConst) value;
+			TypeRef name = analyzer.getTypeRef(resultConst.descriptor);
+			return name;
+		} else if (value instanceof AnnotationInfo) {
+			return newAnnotation((AnnotationInfo) value, elementType, policy, access_flags);
+		} else if (value instanceof Object[]) {
+			Object[] array = (Object[]) value;
+			int num_values = array.length;
+			Object[] result = new Object[num_values];
+			for (int i = 0; i < num_values; i++) {
+				result[i] = newElementValue(array[i], elementType, policy, access_flags);
+			}
+			return result;
+		} else {
+			return value;
+		}
+	}
+
+	private void processBootstrapMethods(BootstrapMethodsAttribute attribute) {
+		for (BootstrapMethod bootstrapMethod : attribute.bootstrap_methods) {
+			for (int bootstrap_argument : bootstrapMethod.bootstrap_arguments) {
+				classConstRef(bootstrap_argument);
+			}
+		}
+	}
+
+	private void processStackMapTable(StackMapTableAttribute attribute) {
+		for (StackMapFrame stackMapFrame : attribute.entries) {
+			switch (stackMapFrame.type()) {
+				case StackMapFrame.SAME_LOCALS_1_STACK_ITEM :
+					SameLocals1StackItemFrame sameLocals1StackItemFrame = (SameLocals1StackItemFrame) stackMapFrame;
+					verification_type_info(sameLocals1StackItemFrame.stack);
+					break;
+				case StackMapFrame.SAME_LOCALS_1_STACK_ITEM_EXTENDED :
+					SameLocals1StackItemFrameExtended sameLocals1StackItemFrameExtended = (SameLocals1StackItemFrameExtended) stackMapFrame;
+					verification_type_info(sameLocals1StackItemFrameExtended.stack);
+					break;
+				case StackMapFrame.APPEND :
+					AppendFrame appendFrame = (AppendFrame) stackMapFrame;
+					for (VerificationTypeInfo verificationTypeInfo : appendFrame.locals) {
+						verification_type_info(verificationTypeInfo);
 					}
-				}
-				return pool[class_info_index];
+					break;
+				case StackMapFrame.FULL_FRAME :
+					FullFrame fullFrame = (FullFrame) stackMapFrame;
+					for (VerificationTypeInfo verificationTypeInfo : fullFrame.locals) {
+						verification_type_info(verificationTypeInfo);
+					}
+					for (VerificationTypeInfo verificationTypeInfo : fullFrame.stack) {
+						verification_type_info(verificationTypeInfo);
+					}
+					break;
+			}
+		}
+	}
 
-			case '@' : // Annotation type
-				return doAnnotation(in, member, policy, collect, access_flags);
-
-			case '[' : // Array
-				int num_values = in.readUnsignedShort();
-				Object[] result = new Object[num_values];
-				for (int i = 0; i < num_values; i++) {
-					result[i] = doElementValue(in, member, policy, collect, access_flags);
-				}
-				return result;
-
-			default :
-				throw new IllegalArgumentException("Invalid value for Annotation ElementValue tag " + tag);
+	private void verification_type_info(VerificationTypeInfo verificationTypeInfo) {
+		switch (verificationTypeInfo.tag) {
+			case VerificationTypeInfo.ITEM_Object :// Object_variable_info
+				ObjectVariableInfo objectVariableInfo = (ObjectVariableInfo) verificationTypeInfo;
+				classConstRef(objectVariableInfo.type);
+				break;
 		}
 	}
 
 	/**
 	 * Add a new package reference.
 	 * 
-	 * @param packageRef
-	 *            A '.' delimited package name
+	 * @param packageRef A '.' delimited package name
 	 */
-	void referTo(TypeRef typeRef, int modifiers) {
-		if (xref != null)
-			xref.add(typeRef);
-		if (typeRef.isPrimitive())
+	private void referTo(TypeRef typeRef, int modifiers) {
+		xref.add(typeRef);
+		if (typeRef.isPrimitive()) {
 			return;
+		}
 
 		PackageRef packageRef = typeRef.getPackageRef();
-		if (packageRef.isPrimitivePackage())
+		if (packageRef.isPrimitivePackage()) {
 			return;
+		}
 
 		imports.add(packageRef);
 
-		if (api != null && (Modifier.isPublic(modifiers) || Modifier.isProtected(modifiers)))
+		if (api != null && (Modifier.isPublic(modifiers) || Modifier.isProtected(modifiers))) {
 			api.add(packageRef);
-
-		if (cd != null)
-			cd.referTo(typeRef, modifiers);
-
-	}
-
-	void referTo(int index, int modifiers) {
-		String descriptor = (String) pool[index];
-		parseDescriptor(descriptor, modifiers);
-	}
-
-	/**
-	 * This method parses a descriptor and adds the package of the descriptor to
-	 * the referenced packages. The syntax of the descriptor is:
-	 * 
-	 * <pre>
-	 *   descriptor ::= ( '(' reference * ')' )? reference
-	 *   reference  ::= 'L' classname ( '&lt;' references '&gt;' )? ';' | 'B' | 'Z' | ... | '+' | '-' | '['
-	 * </pre>
-	 * 
-	 * This methods uses heavy recursion to parse the descriptor and a roving
-	 * pointer to limit the creation of string objects.
-	 * 
-	 * @param descriptor
-	 *            The to be parsed descriptor
-	 * @param rover
-	 *            The pointer to start at
-	 */
-
-	public void parseDescriptor(String descriptor, int modifiers) {
-		// Some descriptors are weird, they start with a generic
-		// declaration that contains ':', not sure what they mean ...
-		int rover = 0;
-		if (descriptor.charAt(0) == '<') {
-			rover = parseFormalTypeParameters(descriptor, rover, modifiers);
 		}
 
-		if (descriptor.charAt(rover) == '(') {
-			rover = parseReferences(descriptor, rover + 1, ')', modifiers);
-			rover++;
-		}
-		parseReferences(descriptor, rover, (char) 0, modifiers);
-	}
-
-	/**
-	 * Parse a sequence of references. A sequence ends with a given character or
-	 * when the string ends.
-	 * 
-	 * @param descriptor
-	 *            The whole descriptor.
-	 * @param rover
-	 *            The index in the descriptor
-	 * @param delimiter
-	 *            The end character or 0
-	 * @return the last index processed, one character after the delimeter
-	 */
-	int parseReferences(String descriptor, int rover, char delimiter, int modifiers) {
-		int r = rover;
-		while (r < descriptor.length() && descriptor.charAt(r) != delimiter) {
-			r = parseReference(descriptor, r, modifiers);
-		}
-		return r;
-	}
-
-	/**
-	 * Parse a single reference. This can be a single character or an object
-	 * reference when it starts with 'L'.
-	 * 
-	 * @param descriptor
-	 *            The descriptor
-	 * @param rover
-	 *            The place to start
-	 * @return The return index after the reference
-	 */
-	int parseReference(String descriptor, int rover, int modifiers) {
-		int r = rover;
-		char c = descriptor.charAt(r);
-		while (c == '[')
-			c = descriptor.charAt(++r);
-
-		if (c == '<') {
-			r = parseReferences(descriptor, r + 1, '>', modifiers);
-		} else if (c == 'T') {
-			// Type variable name
-			r++;
-			while (descriptor.charAt(r) != ';')
-				r++;
-		} else if (c == 'L') {
-			StringBuilder sb = new StringBuilder();
-			r++;
-			while ((c = descriptor.charAt(r)) != ';') {
-				if (c == '<') {
-					r = parseReferences(descriptor, r + 1, '>', modifiers);
-				} else
-					sb.append(c);
-				r++;
+		referred.merge(typeRef, Integer.valueOf(modifiers), (o, n) -> {
+			int old_modifiers = o.intValue();
+			int new_modifiers = n.intValue();
+			if ((old_modifiers == new_modifiers) || (new_modifiers == 0)) {
+				return o;
+			} else if (old_modifiers == 0) {
+				return n;
+			} else {
+				return Integer.valueOf(old_modifiers | new_modifiers);
 			}
-			TypeRef ref = analyzer.getTypeRef(sb.toString());
-			if (cd != null)
-				cd.addReference(ref);
+		});
+	}
 
+	private void referTo(String descriptor, int modifiers) {
+		char c = descriptor.charAt(0);
+		if (c != '(' && c != 'L' && c != '[' && c != '<' && c != 'T') {
+			return;
+		}
+		Signature sig = (c == '(' || c == '<') ? analyzer.getMethodSignature(descriptor)
+			: analyzer.getFieldSignature(descriptor);
+		Set<String> binaryRefs = sig.erasedBinaryReferences();
+		for (String binary : binaryRefs) {
+			TypeRef ref = analyzer.getTypeRef(binary);
 			referTo(ref, modifiers);
-		} else {
-			if ("+-*BCDFIJSZV".indexOf(c) < 0)
-				;// System.err.println("Should not skip: " + c);
 		}
-
-		// this skips a lot of characters
-		// [, *, +, -, B, etc.
-
-		return r + 1;
 	}
 
 	/**
-	 * FormalTypeParameters
-	 * 
-	 * @param descriptor
-	 * @param index
-	 * @return
+	 * This method parses method or field descriptors and calls
+	 * {@link #referTo(TypeRef, int)} for any types found therein.
+	 *
+	 * @param descriptor The to be parsed descriptor
+	 * @param modifiers
+	 * @see "https://docs.oracle.com/javase/specs/jvms/se9/html/jvms-4.html#jvms-4.3"
 	 */
-	private int parseFormalTypeParameters(String descriptor, int index, int modifiers) {
-		index++;
-		while (descriptor.charAt(index) != '>') {
-			// Skip IDENTIFIER
-			index = descriptor.indexOf(':', index) + 1;
-			if (index == 0)
-				throw new IllegalArgumentException("Expected IDENTIFIER: " + descriptor);
-
-			// ClassBound? InterfaceBounds
-
-			char c = descriptor.charAt(index);
-
-			// Class Bound?
-			if (c == 'L' || c == 'T') {
-				index = parseReference(descriptor, index, modifiers); // class
-																		// reference
-				c = descriptor.charAt(index);
-			}
-
-			// Interface Bounds
-			while (c == ':') {
-				index++;
-				index = parseReference(descriptor, index, modifiers);
-				c = descriptor.charAt(index);
-			} // for each interface
-
-		} // for each formal parameter
-		return index + 1; // skip >
+	@Deprecated
+	public void parseDescriptor(String descriptor, int modifiers) {
+		if (referred == null) {
+			referred = new HashMap<>();
+		}
+		referTo(descriptor, modifiers);
 	}
 
 	public Set<PackageRef> getReferred() {
@@ -1445,25 +1648,81 @@ public class Clazz {
 		return path;
 	}
 
-	public String getSourceFile() {
-		return sourceFile;
+	@Deprecated
+	public void reset() {}
+
+	private Stream<Clazz> hierarchyStream(Analyzer analyzer) {
+		requireNonNull(analyzer);
+		Spliterator<Clazz> spliterator = new AbstractSpliterator<Clazz>(Long.MAX_VALUE,
+			Spliterator.DISTINCT | Spliterator.ORDERED | Spliterator.NONNULL) {
+			private Clazz clazz = Clazz.this;
+
+			@Override
+			public boolean tryAdvance(Consumer<? super Clazz> action) {
+				requireNonNull(action);
+				if (clazz == null) {
+					return false;
+				}
+				action.accept(clazz);
+				TypeRef type = clazz.superClass;
+				if (type == null) {
+					clazz = null;
+				} else {
+					try {
+						clazz = analyzer.findClass(type);
+					} catch (Exception e) {
+						throw Exceptions.duck(e);
+					}
+					if (clazz == null) {
+						analyzer.warning("While traversing the type tree for %s cannot find class %s", Clazz.this,
+							type);
+					}
+				}
+				return true;
+			}
+		};
+		return StreamSupport.stream(spliterator, false);
 	}
 
-	/**
-	 * .class construct for different compilers sun 1.1 Detect static variable
-	 * class$com$acme$MyClass 1.2 " 1.3 " 1.4 " 1.5 ldc_w (class) 1.6 " eclipse
-	 * 1.1 class$0, ldc (string), invokestatic Class.forName 1.2 " 1.3 " 1.5 ldc
-	 * (class) 1.6 " 1.5 and later is not an issue, sun pre 1.5 is easy to
-	 * detect the static variable that decodes the class name. For eclipse, the
-	 * class$0 gives away we have a reference encoded in a string.
-	 * compilerversions/compilerversions.jar contains test versions of all
-	 * versions/compilers.
-	 */
+	private Stream<TypeRef> typeStream(Analyzer analyzer, Function<? super Clazz, Collection<? extends TypeRef>> func,
+		Set<TypeRef> visited) {
+		requireNonNull(analyzer);
+		requireNonNull(func);
+		Spliterator<TypeRef> spliterator = new AbstractSpliterator<TypeRef>(Long.MAX_VALUE,
+			Spliterator.DISTINCT | Spliterator.ORDERED | Spliterator.NONNULL) {
+			private final Deque<TypeRef>	queue	= new ArrayDeque<>(func.apply(Clazz.this));
+			private final Set<TypeRef>		seen	= (visited != null) ? visited : new HashSet<>();
 
-	public void reset() {
-		pool = null;
-		intPool = null;
-		xref = null;
+			@Override
+			public boolean tryAdvance(Consumer<? super TypeRef> action) {
+				requireNonNull(action);
+				TypeRef type;
+				do {
+					type = queue.poll();
+					if (type == null) {
+						return false;
+					}
+				} while (seen.contains(type));
+				seen.add(type);
+				action.accept(type);
+				if (visited != null) {
+					Clazz clazz;
+					try {
+						clazz = analyzer.findClass(type);
+					} catch (Exception e) {
+						throw Exceptions.duck(e);
+					}
+					if (clazz == null) {
+						analyzer.warning("While traversing the type tree for %s cannot find class %s", Clazz.this,
+							type);
+					} else {
+						queue.addAll(func.apply(clazz));
+					}
+				}
+				return true;
+			}
+		};
+		return StreamSupport.stream(spliterator, false);
 	}
 
 	public boolean is(QUERY query, Instruction instr, Analyzer analyzer) throws Exception {
@@ -1472,130 +1731,123 @@ public class Clazz {
 				return true;
 
 			case NAMED :
-				if (instr.matches(getClassName().getDottedOnly()))
-					return !instr.isNegated();
-				return false;
+				return instr.matches(getClassName().getDottedOnly()) ^ instr.isNegated();
 
-			case VERSION :
-				String v = major + "." + minor;
-				if (instr.matches(v))
-					return !instr.isNegated();
-				return false;
+			case VERSION : {
+				String v = classFile.major_version + "." + classFile.minor_version;
+				return instr.matches(v) ^ instr.isNegated();
+			}
 
-			case IMPLEMENTS :
-				for (int i = 0; interfaces != null && i < interfaces.length; i++) {
-					if (instr.matches(interfaces[i].getDottedOnly()))
-						return !instr.isNegated();
-				}
-				break;
+			case IMPLEMENTS : {
+				Set<TypeRef> visited = new HashSet<>();
+				return hierarchyStream(analyzer).flatMap(c -> c.typeStream(analyzer, Clazz::interfaces, visited))
+					.map(TypeRef::getDottedOnly)
+					.anyMatch(instr::matches) ^ instr.isNegated();
+			}
 
 			case EXTENDS :
-				if (zuper == null)
-					return false;
-
-				if (instr.matches(zuper.getDottedOnly()))
-					return !instr.isNegated();
-				break;
+				return hierarchyStream(analyzer).skip(1) // skip this class
+					.map(Clazz::getClassName)
+					.map(TypeRef::getDottedOnly)
+					.anyMatch(instr::matches) ^ instr.isNegated();
 
 			case PUBLIC :
-				return Modifier.isPublic(accessx);
+				return isPublic();
 
 			case CONCRETE :
-				return !Modifier.isAbstract(accessx);
+				return !isAbstract();
 
 			case ANNOTATED :
-				if (annotations == null)
-					return false;
+				return typeStream(analyzer, Clazz::annotations, null) //
+					.map(TypeRef::getFQN)
+					.anyMatch(instr::matches) ^ instr.isNegated();
 
-				for (TypeRef annotation : annotations) {
-					if (instr.matches(annotation.getFQN()))
-						return !instr.isNegated();
-				}
+			case INDIRECTLY_ANNOTATED :
+				return typeStream(analyzer, Clazz::annotations, new HashSet<>()) //
+					.map(TypeRef::getFQN)
+					.anyMatch(instr::matches) ^ instr.isNegated();
 
-				return false;
+			case HIERARCHY_ANNOTATED :
+				return hierarchyStream(analyzer) //
+					.flatMap(c -> c.typeStream(analyzer, Clazz::annotations, null))
+					.map(TypeRef::getFQN)
+					.anyMatch(instr::matches) ^ instr.isNegated();
+
+			case HIERARCHY_INDIRECTLY_ANNOTATED : {
+				Set<TypeRef> visited = new HashSet<>();
+				return hierarchyStream(analyzer) //
+					.flatMap(c -> c.typeStream(analyzer, Clazz::annotations, visited))
+					.map(TypeRef::getFQN)
+					.anyMatch(instr::matches) ^ instr.isNegated();
+			}
 
 			case RUNTIMEANNOTATIONS :
 				return hasRuntimeAnnotations;
+
 			case CLASSANNOTATIONS :
 				return hasClassAnnotations;
 
 			case ABSTRACT :
-				return Modifier.isAbstract(accessx);
+				return isAbstract();
 
 			case IMPORTS :
-				for (PackageRef imp : imports) {
-					if (instr.matches(imp.getFQN()))
-						return !instr.isNegated();
-				}
+				return hierarchyStream(analyzer) //
+					.map(Clazz::getReferred)
+					.flatMap(Set::stream)
+					.distinct()
+					.map(PackageRef::getFQN)
+					.anyMatch(instr::matches) ^ instr.isNegated();
+
+			case DEFAULT_CONSTRUCTOR :
+				return hasPublicNoArgsConstructor();
 		}
 
-		if (zuper == null)
-			return false;
-
-		Clazz clazz = analyzer.findClass(zuper);
-		if (clazz == null)
-			return false;
-
-		return clazz.is(query, instr, analyzer);
+		return instr == null ? false : instr.isNegated();
 	}
 
 	@Override
 	public String toString() {
-		return className.getFQN();
-	}
-
-	/**
-	 * Called when crawling the byte code and a method reference is found
-	 */
-	void getMethodDef(int access, int methodRefPoolIndex) {
-		if (methodRefPoolIndex == 0)
-			return;
-
-		Object o = pool[methodRefPoolIndex];
-		if (o != null && o instanceof Assoc) {
-			Assoc assoc = (Assoc) o;
-			if (assoc.tag == 10) {
-				int string_index = intPool[assoc.a];
-				TypeRef className = analyzer.getTypeRef((String) pool[string_index]);
-				int name_and_type_index = assoc.b;
-				Assoc name_and_type = (Assoc) pool[name_and_type_index];
-				if (name_and_type.tag == 12) {
-					// Name and Type
-					int name_index = name_and_type.a;
-					int type_index = name_and_type.b;
-					String method = (String) pool[name_index];
-					String descriptor = (String) pool[type_index];
-					cd.referenceMethod(access, className, method, descriptor);
-				} else
-					throw new IllegalArgumentException(
-							"Invalid class file (or parsing is wrong), assoc is not type + name (12)");
-			} else
-				throw new IllegalArgumentException(
-						"Invalid class file (or parsing is wrong), Assoc is not method ref! (10)");
-		} else
-			throw new IllegalArgumentException("Invalid class file (or parsing is wrong), Not an assoc at a method ref");
+		return (classDef != null) ? classDef.getName() : resource.toString();
 	}
 
 	public boolean isPublic() {
-		return Modifier.isPublic(accessx);
+		return classDef.isPublic();
 	}
 
 	public boolean isProtected() {
-		return Modifier.isProtected(accessx);
+		return classDef.isProtected();
 	}
 
 	public boolean isEnum() {
-		return zuper != null && zuper.getBinary().equals("java/lang/Enum");
+		/**
+		 * The additional check for superClass name avoids stating that an
+		 * anonymous inner class of an enum is an enum class.
+		 */
+		return classDef.isEnum() && superClass.getBinary()
+			.equals("java/lang/Enum");
+	}
+
+	public boolean isSynthetic() {
+		return classDef.isSynthetic();
+	}
+
+	public boolean isModule() {
+		return classDef.isModule();
+	}
+
+	static boolean isModule(int access) {
+		return (access & ACC_MODULE) != 0;
 	}
 
 	public JAVA getFormat() {
-		return JAVA.format(major);
+		return JAVA.format(classFile.major_version);
 
 	}
 
 	public static String objectDescriptorToFQN(String string) {
-		if (string.startsWith("L") && string.endsWith(";"))
-			return string.substring(1, string.length() - 1).replace('/', '.');
+		if ((string.startsWith("L") || string.startsWith("T")) && string.endsWith(";"))
+			return string.substring(1, string.length() - 1)
+				.replace('/', '.');
 
 		switch (string.charAt(0)) {
 			case 'V' :
@@ -1626,7 +1878,7 @@ public class Clazz {
 		StringBuilder out = new StringBuilder();
 		for (int i = 0; i < id.length(); i++) {
 			char c = id.charAt(i);
-			if (c == '_' || c == '$' || c == '.') {
+			if (c == '_' || c == '$' || c == '-' || c == '.') {
 				if (out.length() > 0 && !Character.isWhitespace(out.charAt(out.length() - 1)))
 					out.append(' ');
 				continue;
@@ -1660,71 +1912,86 @@ public class Clazz {
 	}
 
 	public boolean isInterface() {
-		return Modifier.isInterface(accessx);
+		return classDef.isInterface();
 	}
 
 	public boolean isAbstract() {
-		return Modifier.isAbstract(accessx);
+		return classDef.isAbstract();
+	}
+
+	public boolean hasPublicNoArgsConstructor() {
+		return hasDefaultConstructor;
 	}
 
 	public int getAccess() {
-		if (innerAccess == -1)
-			return accessx;
-		return innerAccess;
+		return classDef.getAccess();
+	}
+
+	@Deprecated
+	public void setInnerAccess(int access) {}
+
+	public Stream<Annotation> annotations(String binaryNameFilter) {
+		return classDef.annotations(binaryNameFilter);
+	}
+
+	public Stream<TypeAnnotation> typeAnnotations(String binaryNameFilter) {
+		return classDef.typeAnnotations(binaryNameFilter);
 	}
 
 	public TypeRef getClassName() {
-		return className;
+		return classDef.getType();
 	}
 
-	/**
-	 * To provide an enclosing instance
-	 * 
-	 * @param access
-	 * @param name
-	 * @param descriptor
-	 * @return
-	 */
+	public boolean isInnerClass() {
+		return classDef.isInnerClass();
+	}
+
+	@Deprecated
 	public MethodDef getMethodDef(int access, String name, String descriptor) {
 		return new MethodDef(access, name, descriptor);
 	}
 
 	public TypeRef getSuper() {
-		return zuper;
+		return superClass;
 	}
 
 	public String getFQN() {
-		return className.getFQN();
+		return classDef.getName();
 	}
 
 	public TypeRef[] getInterfaces() {
 		return interfaces;
 	}
 
-	public void setInnerAccess(int access) {
-		innerAccess = access;
+	public List<TypeRef> interfaces() {
+		return (interfaces != null) ? Arrays.asList(interfaces) : emptyList();
+	}
+
+	public Set<TypeRef> annotations() {
+		return (annotations != null) ? annotations : emptySet();
 	}
 
 	public boolean isFinal() {
-		return Modifier.isFinal(accessx);
+		return classDef.isFinal();
 	}
 
-	public void setDeprecated(boolean b) {
-		deprecated = b;
-	}
+	@Deprecated
+	public void setDeprecated(boolean b) {}
 
 	public boolean isDeprecated() {
-		return deprecated;
+		return classDef.isDeprecated();
 	}
 
 	public boolean isAnnotation() {
-		return (accessx & ACC_ANNOTATION) != 0;
+		return classDef.isAnnotation();
+	}
+
+	static boolean isAnnotation(int access) {
+		return (access & ACC_ANNOTATION) != 0;
 	}
 
 	public Set<PackageRef> getAPIUses() {
-		if (api == null)
-			return Collections.emptySet();
-		return api;
+		return (api != null) ? api : emptySet();
 	}
 
 	public Clazz.TypeDef getExtends(TypeRef type) {
@@ -1734,4 +2001,42 @@ public class Clazz {
 	public Clazz.TypeDef getImplements(TypeRef type) {
 		return new TypeDef(type, true);
 	}
+
+	private void classConstRef(int index) {
+		if (constantPool.tag(index) == CONSTANT_Class) {
+			String name = constantPool.className(index);
+			classConstRef(name);
+		}
+	}
+
+	private void classConstRef(String name) {
+		if (name != null) {
+			TypeRef typeRef = analyzer.getTypeRef(name);
+			referTo(typeRef, 0);
+		}
+	}
+
+	public String getClassSignature() {
+		return classDef.getSignature();
+	}
+
+	public String getSourceFile() {
+		return classDef.getSourceFile();
+	}
+
+	public Map<String, Object> getDefaults() throws Exception {
+		parseClassFile();
+		if (!classDef.isAnnotation()) {
+			return emptyMap();
+		}
+		Map<String, Object> map = methods().filter(m -> m.attribute(AnnotationDefaultAttribute.class)
+			.isPresent())
+			.collect(toMap(MethodDef::getName, MethodDef::getConstant));
+		return map;
+	}
+
+	public Resource getResource() {
+		return resource;
+	}
+
 }

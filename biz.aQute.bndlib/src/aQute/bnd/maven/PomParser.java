@@ -1,15 +1,27 @@
 package aQute.bnd.maven;
 
-import java.io.*;
-import java.util.*;
+import java.io.File;
+import java.util.HashSet;
+import java.util.Properties;
+import java.util.Set;
 
-import javax.xml.parsers.*;
-import javax.xml.xpath.*;
+import javax.xml.parsers.DocumentBuilder;
+import javax.xml.parsers.DocumentBuilderFactory;
+import javax.xml.xpath.XPath;
+import javax.xml.xpath.XPathConstants;
+import javax.xml.xpath.XPathExpressionException;
+import javax.xml.xpath.XPathFactory;
 
-import org.w3c.dom.*;
+import org.w3c.dom.Document;
+import org.w3c.dom.Element;
+import org.w3c.dom.Node;
+import org.w3c.dom.NodeList;
+import org.w3c.dom.Text;
 
-import aQute.bnd.osgi.*;
-import aQute.lib.io.*;
+import aQute.bnd.osgi.Analyzer;
+import aQute.bnd.osgi.Processor;
+import aQute.lib.io.IO;
+import aQute.lib.utf8properties.UTF8Properties;
 
 /**
  * Provides a way to parse a maven pom as properties. This provides most of the
@@ -21,8 +33,8 @@ import aQute.lib.io.*;
 public class PomParser extends Processor {
 	static DocumentBuilderFactory	dbf			= DocumentBuilderFactory.newInstance();
 	static XPathFactory				xpathf		= XPathFactory.newInstance();
-	static Set<String>				multiple	= new HashSet<String>();
-	static Set<String>				skip		= new HashSet<String>();
+	static Set<String>				multiple	= new HashSet<>();
+	static Set<String>				skip		= new HashSet<>();
 
 	static {
 		dbf.setNamespaceAware(false);
@@ -53,7 +65,7 @@ public class PomParser extends Processor {
 		XPath xpath = xpathf.newXPath();
 		pom = pom.getAbsoluteFile();
 		Document doc = db.parse(pom);
-		Properties p = new Properties();
+		Properties p = new UTF8Properties();
 
 		// Check if there is a parent pom
 		String relativePath = xpath.evaluate("project/parent/relativePath", doc);
@@ -71,10 +83,10 @@ public class PomParser extends Processor {
 		traverse("pom", e, p);
 
 		String scopes[] = {
-				"provided", "runtime", "test", "system"
+			"provided", "runtime", "test", "system"
 		};
 		NodeList set = (NodeList) xpath.evaluate("//dependency[not(scope) or scope='compile']", doc,
-				XPathConstants.NODESET);
+			XPathConstants.NODESET);
 		if (set.getLength() != 0)
 			p.put("pom.scope.compile", toBsn(set));
 
@@ -98,7 +110,8 @@ public class PomParser extends Processor {
 			sb.append(xpath.evaluate("groupId", child));
 			sb.append(".");
 			sb.append(xpath.evaluate("artifactId", child));
-			if (version != null && version.trim().length() != 0) {
+			if (version != null && version.trim()
+				.length() != 0) {
 				sb.append(";version=");
 				sb.append(Analyzer.cleanupVersion(version));
 			}
@@ -133,7 +146,8 @@ public class PomParser extends Processor {
 			for (int i = 0; i < children.getLength(); i++) {
 				Node child = children.item(i);
 				if (child instanceof Text) {
-					String value = child.getNodeValue().trim();
+					String value = child.getNodeValue()
+						.trim();
 					if (value.length() != 0) {
 						p.put(name, value);
 					}

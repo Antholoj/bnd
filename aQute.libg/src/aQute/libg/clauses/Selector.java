@@ -1,7 +1,12 @@
 package aQute.libg.clauses;
 
-import java.util.*;
-import java.util.regex.*;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.Iterator;
+import java.util.List;
+import java.util.Map;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 public class Selector {
 	Pattern	pattern;
@@ -36,7 +41,7 @@ public class Selector {
 	 * different cases
 	 * 
 	 * @param string
-	 * @return
+	 * @return new selector
 	 */
 	public static Selector getPattern(String string) {
 		boolean negated = false;
@@ -83,8 +88,8 @@ public class Selector {
 	}
 
 	public static List<Selector> getInstructions(Clauses clauses) {
-		List<Selector> result = new ArrayList<Selector>();
-		for (Map.Entry<String,Map<String,String>> entry : clauses.entrySet()) {
+		List<Selector> result = new ArrayList<>();
+		for (Map.Entry<String, Map<String, String>> entry : clauses.entrySet()) {
 			Selector instruction = getPattern(entry.getKey());
 			result.add(instruction);
 		}
@@ -92,7 +97,7 @@ public class Selector {
 	}
 
 	public static <T> List<T> select(Collection<T> domain, List<Selector> instructions) {
-		List<T> result = new ArrayList<T>();
+		List<T> result = new ArrayList<>();
 		Iterator<T> iterator = domain.iterator();
 		value: while (iterator.hasNext()) {
 			T value = iterator.next();

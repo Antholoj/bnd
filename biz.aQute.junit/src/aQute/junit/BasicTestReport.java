@@ -1,93 +1,143 @@
 package aQute.junit;
 
-import java.io.*;
-import java.lang.reflect.*;
-import java.util.*;
+import static java.lang.invoke.MethodHandles.publicLookup;
 
-import junit.framework.*;
+import java.lang.invoke.MethodHandle;
+import java.lang.reflect.Field;
+import java.lang.reflect.Method;
+import java.lang.reflect.Modifier;
+import java.util.List;
 
-import org.osgi.framework.*;
+import org.osgi.framework.Bundle;
+import org.osgi.framework.BundleContext;
+import org.osgi.framework.FrameworkUtil;
+
+import junit.framework.AssertionFailedError;
+import junit.framework.Test;
+import junit.framework.TestListener;
+import junit.framework.TestResult;
 
 public class BasicTestReport implements TestListener, TestReporter {
-	private int				errors;
-	private PrintStream		out;
-	private final Tee		systemOut;
-	private final Tee		systemErr;
-	private int				fails;
-	private Bundle			targetBundle;
-	private final Activator	activator;
+	private int					errors;
+	private final Tee			systemOut;
+	private final Tee			systemErr;
+	private int					fails;
+	private Bundle				targetBundle;
+	private final Activator		activator;
+	private final TestResult	result;
 
-	public BasicTestReport(Activator activator, Tee systemOut, Tee systemErr) {
+	public BasicTestReport(Activator activator, Tee systemOut, Tee systemErr, TestResult result) {
 		this.systemOut = systemOut;
 		this.systemErr = systemErr;
 		this.activator = activator;
+		this.result = result;
 	}
 
+	@Override
 	public void setup(Bundle fw, Bundle targetBundle) {
 		this.targetBundle = targetBundle;
 	}
 
+	@Override
 	public void begin(List<Test> tests, int realcount) {
 		activator.trace(">>>> %s, tests %s", targetBundle, tests);
 	}
 
+	@Override
 	public void addError(Test test, Throwable t) {
-		activator.trace("  add error to %s : %s", test, t);
+		if (activator.isTrace()) {
+			activator.trace("  add error to %s : %s", test, t);
+		} else {
+			systemErr.capture(false);
+			try {
+				activator.message("", "TEST %s <<< ERROR: %s", test, t);
+			} finally {
+				systemErr.capture(true);
+			}
+		}
 		check();
-		fails++;
-		errors++;
 	}
 
+	@Override
 	public void addFailure(Test test, AssertionFailedError t) {
-		activator.trace("  add failure to %s : %s", test, t);
+		if (activator.isTrace()) {
+			activator.trace("  add failure to %s : %s", test, t);
+		} else {
+			systemErr.capture(false);
+			try {
+				activator.message("", "TEST %s <<< FAILURE: %s", test, t);
+			} finally {
+				systemErr.capture(true);
+			}
+		}
 		check();
-		fails++;
-		errors++;
 	}
 
+	@Override
 	public void startTest(Test test) {
 		activator.trace("  >> %s", test);
 		check();
 		Bundle b = targetBundle;
-		if (b == null)
+		if (b == null) {
 			b = FrameworkUtil.getBundle(test.getClass());
+		}
 
 		if (b != null) {
 			BundleContext context = b.getBundleContext();
-			activator.trace("got bundle context %s from %s in state %s", context, b, b.getState());
+			activator.trace("Obtained bundle context %s from %s in state %s", context, b, b.getState());
 			assert context != null;
 			try {
-				Method m = test.getClass().getMethod("setBundleContext", new Class[] {
-					BundleContext.class
-				});
-				m.setAccessible(true);
-				m.invoke(test, new Object[] {
-					context
-				});
-				activator.trace("set context through setter");
-			}
-			catch (Exception e) {
-				Field f;
+				MethodHandle mh;
 				try {
-					f = test.getClass().getField("context");
-					f.set(test, context);
-					activator.trace("set context in field");
+					Method m = test.getClass()
+						.getMethod("setBundleContext", BundleContext.class);
+					m.setAccessible(true);
+					mh = publicLookup().unreflect(m);
+					if (!Modifier.isStatic(m.getModifiers())) {
+						mh = mh.bindTo(test);
+					}
+					activator.trace("setBundleContext method will be used to set BundleContext");
+				} catch (NoSuchMethodException | IllegalAccessException e) {
+					try {
+						Field f = test.getClass()
+							.getField("context");
+						f.setAccessible(true);
+						mh = publicLookup().unreflectSetter(f);
+						if (!Modifier.isStatic(f.getModifiers())) {
+							mh = mh.bindTo(test);
+						}
+						activator.trace("context field will be used to set BundleContext");
+					} catch (NoSuchFieldException | IllegalAccessException e1) {
+						mh = null;
+					}
 				}
-				catch (Exception e1) {
-					// Ok, no problem
+				if (mh != null) {
+					mh.invoke(context);
+					activator.trace("BundleContext set in test");
 				}
+			} catch (Error e) {
+				throw e;
+			} catch (Throwable t) {
+				// Ok, no problem
 			}
 		}
-		fails = 0;
-		systemOut.clear().capture(true).echo(true);
-		systemErr.clear().capture(true).echo(true);
+
+		fails = result.failureCount();
+		errors = result.errorCount();
+		systemOut.clear()
+			.capture(true)
+			.echo(true);
+		systemErr.clear()
+			.capture(true)
+			.echo(true);
 	}
 
+	@Override
 	public void endTest(Test test) {
-		activator.trace("  << %s, fails=%s, errors=%s", test, fails, errors);
+		activator.trace("  << %s, fails=%s, errors=%s", test, result.failureCount(), result.errorCount());
 		systemOut.capture(false);
 		systemErr.capture(false);
-		if (fails > 0) {
+		if ((result.failureCount() > fails) || (result.errorCount() > errors)) {
 			String sysout = systemOut.getContent();
 			String syserr = systemErr.getContent();
 			if (sysout != null)
@@ -99,22 +149,29 @@ public class BasicTestReport implements TestListener, TestReporter {
 		check();
 	}
 
+	@Override
 	public void end() {
 		activator.trace("<<<<");
 	}
 
+	@Override
 	public void aborted() {
 		activator.trace("ABORTED");
-		out.println("ABORTED");
 	}
 
-	protected void check() {
-
+	private void check() {
+		if (!activator.active()) {
+			result.stop();
+		}
 	}
 
 	String[] getCaptured() {
 		return new String[] {
-				systemOut.getContent(), systemErr.getContent()
+			systemOut.getContent(), systemErr.getContent()
 		};
+	}
+
+	TestResult getTestResult() {
+		return result;
 	}
 }

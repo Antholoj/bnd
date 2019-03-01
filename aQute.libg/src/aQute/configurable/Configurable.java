@@ -1,24 +1,50 @@
 package aQute.configurable;
 
-import java.io.*;
-import java.lang.reflect.*;
+import static java.lang.invoke.MethodHandles.publicLookup;
+import static java.lang.invoke.MethodType.methodType;
+import static java.nio.charset.StandardCharsets.UTF_8;
+
+import java.io.File;
+import java.lang.invoke.MethodType;
+import java.lang.reflect.Array;
+import java.lang.reflect.GenericArrayType;
+import java.lang.reflect.InvocationHandler;
+import java.lang.reflect.Method;
+import java.lang.reflect.ParameterizedType;
 import java.lang.reflect.Proxy;
-import java.net.*;
-import java.util.*;
-import java.util.regex.*;
+import java.lang.reflect.Type;
+import java.net.URL;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collection;
+import java.util.Dictionary;
+import java.util.Enumeration;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
+import java.util.LinkedList;
+import java.util.List;
+import java.util.Map;
+import java.util.Queue;
+import java.util.Set;
+import java.util.SortedMap;
+import java.util.SortedSet;
+import java.util.TreeMap;
+import java.util.TreeSet;
+import java.util.regex.Pattern;
 
 public class Configurable<T> {
+	public static Pattern SPLITTER_P = Pattern.compile("(?<!\\\\)\\|");
 
-	public static <T> T createConfigurable(Class<T> c, Map< ? , ? > properties) {
-		Object o = Proxy.newProxyInstance(c.getClassLoader(), new Class< ? >[] {
+	public static <T> T createConfigurable(Class<T> c, Map<?, ?> properties) {
+		Object o = Proxy.newProxyInstance(c.getClassLoader(), new Class<?>[] {
 			c
 		}, new ConfigurableHandler(properties, c.getClassLoader()));
 		return c.cast(o);
 	}
 
-	public static <T> T createConfigurable(Class<T> c, Dictionary< ? , ? > properties) {
-		Map<Object,Object> alt = new HashMap<Object,Object>();
-		for (Enumeration< ? > e = properties.keys(); e.hasMoreElements();) {
+	public static <T> T createConfigurable(Class<T> c, Dictionary<?, ?> properties) {
+		Map<Object, Object> alt = new HashMap<>();
+		for (Enumeration<?> e = properties.keys(); e.hasMoreElements();) {
 			Object key = e.nextElement();
 			alt.put(key, properties.get(key));
 		}
@@ -26,19 +52,21 @@ public class Configurable<T> {
 	}
 
 	static class ConfigurableHandler implements InvocationHandler {
-		final Map< ? , ? >	properties;
+		final Map<?, ?>		properties;
 		final ClassLoader	loader;
 
-		ConfigurableHandler(Map< ? , ? > properties, ClassLoader loader) {
+		ConfigurableHandler(Map<?, ?> properties, ClassLoader loader) {
 			this.properties = properties;
 			this.loader = loader;
 		}
 
+		@Override
 		public Object invoke(Object proxy, Method method, Object[] args) throws Throwable {
 			Config ad = method.getAnnotation(Config.class);
 			String id = Configurable.mangleMethodName(method.getName());
 
-			if (ad != null && !ad.id().equals(Config.NULL))
+			if (ad != null && !ad.id()
+				.equals(Config.NULL))
 				id = ad.id();
 
 			Object o = properties.get(id);
@@ -56,10 +84,11 @@ public class Configurable<T> {
 				}
 			}
 			if (o == null) {
-				Class< ? > rt = method.getReturnType();
+				Class<?> rt = method.getReturnType();
 				if (rt == boolean.class || rt == Boolean.class)
 					return false;
-				if (method.getReturnType().isPrimitive() || Number.class.isAssignableFrom(method.getReturnType())) {
+				if (method.getReturnType()
+					.isPrimitive() || Number.class.isAssignableFrom(method.getReturnType())) {
 
 					o = "0";
 				} else
@@ -73,7 +102,8 @@ public class Configurable<T> {
 				if (method.getReturnType() == File.class && args[0].getClass() == File.class) {
 					return new File((File) args[0], s);
 				} else if (method.getReturnType() == URL.class && args[0].getClass() == File.class) {
-					return new URL(((File) args[0]).toURI().toURL(), s);
+					return new URL(((File) args[0]).toURI()
+						.toURL(), s);
 				} else if (method.getReturnType() == URL.class && args[0].getClass() == URL.class) {
 					return new URL((URL) args[0], s);
 				}
@@ -82,7 +112,7 @@ public class Configurable<T> {
 		}
 
 		@SuppressWarnings({
-				"unchecked", "rawtypes"
+			"unchecked", "rawtypes"
 		})
 		public Object convert(Type type, Object o) throws Exception {
 
@@ -99,13 +129,13 @@ public class Configurable<T> {
 				return convertArray(gType.getGenericComponentType(), o);
 			}
 
-			Class< ? > resultType = (Class< ? >) type;
+			Class<?> resultType = (Class<?>) type;
 
 			if (resultType.isArray()) {
 				return convertArray(resultType.getComponentType(), o);
 			}
 
-			Class< ? > actualType = o.getClass();
+			Class<?> actualType = o.getClass();
 			if (actualType.isAssignableFrom(resultType))
 				return o;
 
@@ -169,20 +199,19 @@ public class Configurable<T> {
 			}
 
 			try {
-				Constructor< ? > c = resultType.getConstructor(String.class);
-				return c.newInstance(o.toString());
-			}
-			catch (Throwable t) {
+				return newInstance(resultType, o.toString());
+			} catch (Throwable t) {
 				// handled on next line
 			}
-			throw new IllegalArgumentException("No conversion to " + resultType + " from " + actualType + " value " + o);
+			throw new IllegalArgumentException(
+				"No conversion to " + resultType + " from " + actualType + " value " + o);
 		}
 
-		private Object convert(ParameterizedType pType, Object o) throws InstantiationException,
-				IllegalAccessException, Exception {
-			Class< ? > resultType = (Class< ? >) pType.getRawType();
+		private Object convert(ParameterizedType pType, Object o)
+			throws InstantiationException, IllegalAccessException, Exception {
+			Class<?> resultType = (Class<?>) pType.getRawType();
 			if (Collection.class.isAssignableFrom(resultType)) {
-				Collection< ? > input = toCollection(o);
+				Collection<?> input = toCollection(o);
 				if (resultType.isInterface()) {
 					if (resultType == Collection.class || resultType == List.class)
 						resultType = ArrayList.class;
@@ -200,10 +229,11 @@ public class Configurable<T> {
 						resultType = LinkedList.class;
 					else
 						throw new IllegalArgumentException(
-								"Unknown interface for a collection, no concrete class found: " + resultType);
+							"Unknown interface for a collection, no concrete class found: " + resultType);
 				}
 
-				Collection<Object> result = (Collection<Object>) resultType.newInstance();
+				@SuppressWarnings("unchecked")
+				Collection<Object> result = (Collection<Object>) newInstance(resultType);
 				Type componentType = pType.getActualTypeArguments()[0];
 
 				for (Object i : input) {
@@ -214,7 +244,7 @@ public class Configurable<T> {
 				return loader.loadClass(o.toString());
 			}
 			if (Map.class.isAssignableFrom(resultType)) {
-				Map< ? , ? > input = toMap(o);
+				Map<?, ?> input = toMap(o);
 				if (resultType.isInterface()) {
 					if (resultType == SortedMap.class)
 						resultType = TreeMap.class;
@@ -222,24 +252,33 @@ public class Configurable<T> {
 						resultType = LinkedHashMap.class;
 					else
 						throw new IllegalArgumentException(
-								"Unknown interface for a collection, no concrete class found: " + resultType);
+							"Unknown interface for a collection, no concrete class found: " + resultType);
 				}
-				Map<Object,Object> result = (Map<Object,Object>) resultType.newInstance();
+				@SuppressWarnings("unchecked")
+				Map<Object, Object> result = (Map<Object, Object>) resultType.getConstructor()
+					.newInstance();
 				Type keyType = pType.getActualTypeArguments()[0];
 				Type valueType = pType.getActualTypeArguments()[1];
 
-				for (Map.Entry< ? , ? > entry : input.entrySet()) {
+				for (Map.Entry<?, ?> entry : input.entrySet()) {
 					result.put(convert(keyType, entry.getKey()), convert(valueType, entry.getValue()));
 				}
 				return result;
 			}
-			throw new IllegalArgumentException("cannot convert to " + pType
-					+ " because it uses generics and is not a Collection or a map");
+			throw new IllegalArgumentException(
+				"cannot convert to " + pType + " because it uses generics and is not a Collection or a map");
 		}
 
 		Object convertArray(Type componentType, Object o) throws Exception {
-			Collection< ? > input = toCollection(o);
-			Class< ? > componentClass = getRawClass(componentType);
+			if (o instanceof String) {
+				String s = (String) o;
+				if (componentType == Byte.class || componentType == byte.class)
+					return s.getBytes(UTF_8);
+				if (componentType == Character.class || componentType == char.class)
+					return s.toCharArray();
+			}
+			Collection<?> input = toCollection(o);
+			Class<?> componentClass = getRawClass(componentType);
 			Object array = Array.newInstance(componentClass, input.size());
 
 			int i = 0;
@@ -249,25 +288,28 @@ public class Configurable<T> {
 			return array;
 		}
 
-		private Class< ? > getRawClass(Type type) {
+		private Class<?> getRawClass(Type type) {
 			if (type instanceof Class)
-				return (Class< ? >) type;
+				return (Class<?>) type;
 
 			if (type instanceof ParameterizedType)
-				return (Class< ? >) ((ParameterizedType) type).getRawType();
+				return (Class<?>) ((ParameterizedType) type).getRawType();
 
-			throw new IllegalArgumentException("For the raw type, type must be ParamaterizedType or Class but is "
-					+ type);
+			throw new IllegalArgumentException(
+				"For the raw type, type must be ParamaterizedType or Class but is " + type);
 		}
 
-		private Collection< ? > toCollection(Object o) {
+		private Collection<?> toCollection(Object o) {
 			if (o instanceof Collection)
-				return (Collection< ? >) o;
+				return (Collection<?>) o;
 
-			if (o.getClass().isArray()) {
-				if (o.getClass().getComponentType().isPrimitive()) {
+			if (o.getClass()
+				.isArray()) {
+				if (o.getClass()
+					.getComponentType()
+					.isPrimitive()) {
 					int length = Array.getLength(o);
-					List<Object> result = new ArrayList<Object>(length);
+					List<Object> result = new ArrayList<>(length);
 					for (int i = 0; i < length; i++) {
 						result.add(Array.get(o, i));
 					}
@@ -278,15 +320,18 @@ public class Configurable<T> {
 
 			if (o instanceof String) {
 				String s = (String) o;
-				if (s.indexOf('|') > 0)
+				if (SPLITTER_P.matcher(s)
+					.find())
 					return Arrays.asList(s.split("\\|"));
+				else
+					return unescape(s);
 			}
 			return Arrays.asList(o);
 		}
 
-		private Map< ? , ? > toMap(Object o) {
+		private Map<?, ?> toMap(Object o) {
 			if (o instanceof Map)
-				return (Map< ? , ? >) o;
+				return (Map<?, ?>) o;
 
 			throw new IllegalArgumentException("Cannot convert " + o + " to a map as requested");
 		}
@@ -309,4 +354,46 @@ public class Configurable<T> {
 		}
 		return sb.toString();
 	}
+
+	public static List<String> unescape(String s) {
+		// do it the OSGi way
+		List<String> tokens = new ArrayList<>();
+
+		String[] parts = s.split("(?<!\\\\),");
+
+		for (String p : parts) {
+			p = p.replaceAll("^\\s*", "");
+			p = p.replaceAll("(?!<\\\\)\\s*$", "");
+			p = p.replaceAll("\\\\([\\s,\\\\|])", "$1");
+			tokens.add(p);
+		}
+		return tokens;
+	}
+
+	private static final MethodType defaultConstructor = methodType(void.class);
+
+	static <T> T newInstance(Class<T> rawClass) throws Exception {
+		try {
+			return (T) publicLookup().findConstructor(rawClass, defaultConstructor)
+				.invoke();
+		} catch (Error | Exception e) {
+			throw e;
+		} catch (Throwable e) {
+			throw new RuntimeException(e);
+		}
+	}
+
+	private static final MethodType stringConstructor = methodType(void.class, String.class);
+
+	private static <T> T newInstance(Class<T> rawClass, String arg) throws Exception {
+		try {
+			return (T) publicLookup().findConstructor(rawClass, stringConstructor)
+				.invoke(arg);
+		} catch (Error | Exception e) {
+			throw e;
+		} catch (Throwable e) {
+			throw new RuntimeException(e);
+		}
+	}
+
 }

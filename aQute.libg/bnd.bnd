@@ -1,9 +1,23 @@
--buildpath: com.springsource.junit,\
-	ee.j2se;version=${javac.ee}
+# Set javac settings from JDT prefs
+-include: ${workspace}/cnf/includes/jdt.bnd
 
-Export-Package: aQute.lib.*, aQute.libg.*, aQute.configurable, aQute.service.*
-Bundle-Version: 2.7.4
+-buildpath: \
+    osgi.annotation;version=latest;maven-scope=provided,\
+	slf4j.api;version=latest,\
+	org.osgi.util.function;version=latest,\
+	org.osgi.util.promise;version=latest
+
+-testpath: \
+	${junit},\
+	osgi.core;version=latest,\
+	slf4j.simple;version=latest
+
+-exportcontents: *
+
 Bundle-Description: A library to be statically linked. Contains many small utilities. This bundle \
  should not be installed in a framework, it is compile only.
 
+-baseline: *
+-sources= true
 
+-builderignore: testresources

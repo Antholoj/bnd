@@ -1,35 +1,54 @@
 package aQute.bnd.signing;
 
-import java.io.*;
-import java.security.*;
-import java.security.KeyStore.PrivateKeyEntry;
-import java.util.*;
-import java.util.jar.*;
-import java.util.regex.*;
+import static java.nio.charset.StandardCharsets.UTF_8;
 
-import aQute.bnd.osgi.*;
-import aQute.lib.base64.*;
-import aQute.lib.io.*;
+import java.io.File;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.io.PrintWriter;
+import java.io.Writer;
+import java.security.KeyStore;
+import java.security.KeyStore.PrivateKeyEntry;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.security.PrivateKey;
+import java.security.Signature;
+import java.util.Map;
+import java.util.jar.Manifest;
+import java.util.regex.Pattern;
+
+import aQute.bnd.osgi.EmbeddedResource;
+import aQute.bnd.osgi.Jar;
+import aQute.bnd.osgi.Processor;
+import aQute.bnd.osgi.Resource;
+import aQute.lib.base64.Base64;
+import aQute.lib.io.ByteBufferOutputStream;
+import aQute.lib.io.IO;
+import aQute.lib.io.IOConstants;
 
 /**
  * This class is used with the aQute.bnd.osgi package, it signs jars with DSA
  * signature. -sign: md5, sha1
  */
 public class Signer extends Processor {
-	static Pattern	METAINFDIR		= Pattern.compile("META-INF/[^/]*");
-	String			digestNames[]	= new String[] {
-										"MD5"
-									};
-	File			keystoreFile	= new File("keystore");
-	String			password;
-	String			alias;
+	static final int	BUFFER_SIZE		= IOConstants.PAGE_SIZE * 1;
+
+	static Pattern		METAINFDIR		= Pattern.compile("META-INF/[^/]*");
+	String				digestNames[]	= new String[] {
+		"MD5"
+	};
+	File				keystoreFile	= new File("keystore");
+	String				password;
+	String				alias;
 
 	public void signJar(Jar jar) {
 		if (digestNames == null || digestNames.length == 0)
 			error("Need at least one digest algorithm name, none are specified");
 
-		if (keystoreFile == null || !keystoreFile.getAbsoluteFile().exists()) {
-			error("No such keystore file: " + keystoreFile);
+		if (keystoreFile == null || !keystoreFile.getAbsoluteFile()
+			.exists()) {
+			error("No such keystore file: %s", keystoreFile);
 			return;
 		}
 
@@ -42,25 +61,25 @@ public class Signer extends Processor {
 
 		getAlgorithms(digestNames, digestAlgorithms);
 
-		try {
+		try (ByteBufferOutputStream o = new ByteBufferOutputStream()) {
 			Manifest manifest = jar.getManifest();
-			manifest.getMainAttributes().putValue("Signed-By", "Bnd");
+			manifest.getMainAttributes()
+				.putValue("Signed-By", "Bnd");
 
 			// Create a new manifest that contains the
 			// Name parts with the specified digests
 
-			ByteArrayOutputStream o = new ByteArrayOutputStream();
 			manifest.write(o);
 			doManifest(jar, digestNames, digestAlgorithms, o);
 			o.flush();
 			byte newManifestBytes[] = o.toByteArray();
-			jar.putResource("META-INF/MANIFEST.MF", new EmbeddedResource(newManifestBytes, 0));
+			jar.putResource("META-INF/MANIFEST.MF", new EmbeddedResource(newManifestBytes, 0L));
 
 			// Use the bytes from the new manifest to create
 			// a signature file
 
 			byte[] signatureFileBytes = doSignatureFile(digestNames, digestAlgorithms, newManifestBytes);
-			jar.putResource("META-INF/BND.SF", new EmbeddedResource(signatureFileBytes, 0));
+			jar.putResource("META-INF/BND.SF", new EmbeddedResource(signatureFileBytes, 0L));
 
 			// Now we must create an RSA signature
 			// this requires the private key from the keystore
@@ -69,22 +88,16 @@ public class Signer extends Processor {
 
 			KeyStore.PrivateKeyEntry privateKeyEntry = null;
 
-			java.io.FileInputStream keystoreInputStream = null;
-			try {
-				keystoreInputStream = new java.io.FileInputStream(keystoreFile);
+			try (InputStream keystoreInputStream = IO.stream(keystoreFile)) {
 				char[] pw = password == null ? new char[0] : password.toCharArray();
 
 				keystore.load(keystoreInputStream, pw);
 				keystoreInputStream.close();
 				privateKeyEntry = (PrivateKeyEntry) keystore.getEntry(alias, new KeyStore.PasswordProtection(pw));
-			}
-			catch (Exception e) {
-				error("No able to load the private key from the give keystore(" + keystoreFile.getAbsolutePath()
-						+ ") with alias " + alias + " : " + e);
+			} catch (Exception e) {
+				exception(e, "Not able to load the private key from the given keystore(%s) with alias %s",
+					keystoreFile.getAbsolutePath(), alias);
 				return;
-			}
-			finally {
-				IO.close(keystoreInputStream);
 			}
 			PrivateKey privateKey = privateKeyEntry.getPrivateKey();
 
@@ -100,65 +113,73 @@ public class Signer extends Processor {
 			// is an idea but we will to have do ASN.1 BER
 			// encoding ...
 
-			ByteArrayOutputStream tmpStream = new ByteArrayOutputStream();
-			jar.putResource("META-INF/BND.RSA", new EmbeddedResource(tmpStream.toByteArray(), 0));
-		}
-		catch (Exception e) {
-			error("During signing: " + e);
+			try (ByteBufferOutputStream tmpStream = new ByteBufferOutputStream()) {
+				jar.putResource("META-INF/BND.RSA", new EmbeddedResource(tmpStream.toByteArray(), 0L));
+			}
+		} catch (Exception e) {
+			exception(e, "During signing: %s", e);
 		}
 	}
 
 	private byte[] doSignatureFile(String[] digestNames, MessageDigest[] algorithms, byte[] manbytes)
-			throws IOException {
-		ByteArrayOutputStream out = new ByteArrayOutputStream();
-		PrintWriter ps = IO.writer(out);
-		ps.print("Signature-Version: 1.0\r\n");
+		throws IOException {
+		try (ByteBufferOutputStream out = new ByteBufferOutputStream(); PrintWriter ps = IO.writer(out)) {
+			ps.print("Signature-Version: 1.0\r\n");
 
-		for (int a = 0; a < algorithms.length; a++) {
-			if (algorithms[a] != null) {
-				byte[] digest = algorithms[a].digest(manbytes);
-				ps.print(digestNames[a] + "-Digest-Manifest: ");
-				ps.print(new Base64(digest));
-				ps.print("\r\n");
+			for (int a = 0; a < algorithms.length; a++) {
+				if (algorithms[a] != null) {
+					byte[] digest = algorithms[a].digest(manbytes);
+					ps.print(digestNames[a] + "-Digest-Manifest: ");
+					ps.print(new Base64(digest));
+					ps.print("\r\n");
+				}
 			}
+			ps.flush();
+			return out.toByteArray();
 		}
-		return out.toByteArray();
 	}
 
 	private void doManifest(Jar jar, String[] digestNames, MessageDigest[] algorithms, OutputStream out)
-			throws Exception {
+		throws Exception {
+		Writer w = IO.writer(out, UTF_8);
+		try {
+			for (Map.Entry<String, Resource> entry : jar.getResources()
+				.entrySet()) {
+				String name = entry.getKey();
+				if (!METAINFDIR.matcher(name)
+					.matches()) {
+					w.write("\r\n");
+					w.write("Name: ");
+					w.write(name);
+					w.write("\r\n");
 
-		for (Map.Entry<String,Resource> entry : jar.getResources().entrySet()) {
-			String name = entry.getKey();
-			if (!METAINFDIR.matcher(name).matches()) {
-				out.write("\r\n".getBytes("UTF-8"));
-				out.write("Name: ".getBytes("UTF-8"));
-				out.write(name.getBytes("UTF-8"));
-				out.write("\r\n".getBytes("UTF-8"));
-
-				digest(algorithms, entry.getValue());
-				for (int a = 0; a < algorithms.length; a++) {
-					if (algorithms[a] != null) {
-						byte[] digest = algorithms[a].digest();
-						String header = digestNames[a] + "-Digest: " + new Base64(digest) + "\r\n";
-						out.write(header.getBytes("UTF-8"));
+					digest(algorithms, entry.getValue());
+					for (int a = 0; a < algorithms.length; a++) {
+						if (algorithms[a] != null) {
+							byte[] digest = algorithms[a].digest();
+							String header = digestNames[a] + "-Digest: " + new Base64(digest) + "\r\n";
+							w.write(header);
+						}
 					}
 				}
 			}
+		} finally {
+			w.flush();
 		}
 	}
 
 	private void digest(MessageDigest[] algorithms, Resource r) throws Exception {
-		InputStream in = r.openInputStream();
-		byte[] data = new byte[1024];
-		int size = in.read(data);
-		while (size > 0) {
-			for (int a = 0; a < algorithms.length; a++) {
-				if (algorithms[a] != null) {
-					algorithms[a].update(data, 0, size);
+		try (InputStream in = r.openInputStream()) {
+			byte[] data = new byte[BUFFER_SIZE];
+			int size = in.read(data);
+			while (size > 0) {
+				for (int a = 0; a < algorithms.length; a++) {
+					if (algorithms[a] != null) {
+						algorithms[a].update(data, 0, size);
+					}
 				}
+				size = in.read(data);
 			}
-			size = in.read(data);
 		}
 	}
 
@@ -167,9 +188,8 @@ public class Signer extends Processor {
 			String name = digestNames[i];
 			try {
 				algorithms[i] = MessageDigest.getInstance(name);
-			}
-			catch (NoSuchAlgorithmException e) {
-				error("Specified digest algorithm " + digestNames[i] + ", but not such algorithm was found: " + e);
+			} catch (NoSuchAlgorithmException e) {
+				exception(e, "Specified digest algorithm %s, but not such algorithm was found", digestNames[i]);
 			}
 		}
 	}

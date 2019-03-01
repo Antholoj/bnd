@@ -1,12 +1,16 @@
 package aQute.libg.clauses;
 
-import java.util.*;
+import java.util.ArrayList;
+import java.util.Iterator;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
 
-import aQute.libg.log.*;
-import aQute.libg.qtokens.*;
+import aQute.libg.log.Logger;
+import aQute.libg.qtokens.QuotedTokenizer;
 
-public class Clauses extends LinkedHashMap<String,Map<String,String>> {
-	private static final long	serialVersionUID	= 1L;
+public class Clauses extends LinkedHashMap<String, Map<String, String>> {
+	private static final long serialVersionUID = 1L;
 
 	/**
 	 * Standard OSGi header parser. This parser can handle the format clauses
@@ -15,11 +19,11 @@ public class Clauses extends LinkedHashMap<String,Map<String,String>> {
 	 * }
 	 * 
 	 * @param value
-	 * @return
-	 * @throws MojoExecutionException
+	 * @return parsed clauses
 	 */
 	static public Clauses parse(String value, Logger logger) {
-		if (value == null || value.trim().length() == 0)
+		if (value == null || value.trim()
+			.length() == 0)
 			return new Clauses();
 
 		Clauses result = new Clauses();
@@ -28,15 +32,15 @@ public class Clauses extends LinkedHashMap<String,Map<String,String>> {
 		do {
 			boolean hadAttribute = false;
 			Clause clause = new Clause();
-			List<String> aliases = new ArrayList<String>();
+			List<String> aliases = new ArrayList<>();
 			aliases.add(qt.nextToken());
 			del = qt.getSeparator();
 			while (del == ';') {
 				String adname = qt.nextToken();
 				if ((del = qt.getSeparator()) != '=') {
 					if (hadAttribute)
-						throw new IllegalArgumentException("Header contains name field after attribute or directive: "
-								+ adname + " from " + value);
+						throw new IllegalArgumentException(
+							"Header contains name field after attribute or directive: " + adname + " from " + value);
 					aliases.add(adname);
 				} else {
 					String advalue = qt.nextToken();
@@ -50,7 +54,7 @@ public class Clauses extends LinkedHashMap<String,Map<String,String>> {
 				if (result.containsKey(packageName)) {
 					if (logger != null)
 						logger.warning("Duplicate package name in header: " + packageName
-								+ ". Multiple package names in one clause not supported in Bnd.");
+							+ ". Multiple package names in one clause not supported in Bnd.");
 				} else
 					result.put(packageName, clause);
 			}

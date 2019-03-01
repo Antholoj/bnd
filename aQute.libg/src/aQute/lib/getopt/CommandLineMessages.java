@@ -1,12 +1,12 @@
 package aQute.lib.getopt;
 
-import java.util.*;
+import java.util.List;
 
-import aQute.service.reporter.*;
+import aQute.service.reporter.Messages;
 
 public interface CommandLineMessages extends Messages {
 
-	ERROR Option__WithArgumentNotLastInAvvreviation_(String name, char charAt, String typeDescriptor);
+	ERROR Option__WithArgumentNotLastInAbbreviation_(String name, char charAt, String typeDescriptor);
 
 	ERROR MissingArgument__(String name, char charAt);
 

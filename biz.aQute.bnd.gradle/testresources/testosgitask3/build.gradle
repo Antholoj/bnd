@@ -1,0 +1,37 @@
+/*
+ *
+ */
+
+import aQute.bnd.gradle.TestOSGi
+
+plugins {
+    id 'biz.aQute.bnd.builder'
+}
+
+version = '1.0.0'
+
+repositories {
+    mavenLocal()
+    mavenCentral()
+}
+
+configurations {
+  bundles
+}
+
+dependencies {
+    compile 'biz.aQute.bnd:biz.aQute.junit:+'
+    bundles 'biz.aQute.bnd:biz.aQute.junit:+'
+    bundles 'org.eclipse.platform:org.eclipse.osgi:3.13.0'
+}
+
+task testosgi(type: TestOSGi) {
+   description "OSGi Test ${name}.bndrun"
+   group 'test'
+   bndrun "${name}.bndrun"
+   bundles = [configurations.bundles, jar.archivePath]
+}
+
+check {
+  dependsOn testosgi
+}

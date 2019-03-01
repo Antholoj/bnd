@@ -1,20 +1,28 @@
 package aQute.bnd.make.calltree;
 
-import java.io.*;
-import java.lang.reflect.*;
-import java.util.*;
+import java.io.OutputStream;
+import java.io.OutputStreamWriter;
+import java.io.PrintWriter;
+import java.lang.reflect.Modifier;
+import java.util.Collection;
+import java.util.Comparator;
+import java.util.Map;
+import java.util.Set;
+import java.util.TreeMap;
+import java.util.TreeSet;
 
-import aQute.bnd.osgi.*;
+import aQute.bnd.osgi.ClassDataCollector;
+import aQute.bnd.osgi.Clazz;
 import aQute.bnd.osgi.Clazz.MethodDef;
+import aQute.bnd.osgi.Constants;
+import aQute.bnd.osgi.WriteResource;
 
 /**
  * Create an XML call tree of a set of classes. The structure of the XML is:
  * 
  * <pre>
- *    calltree ::= &lt;using&gt; &lt;usedby&gt;
- *    using    ::= &lt;method&gt; *
- *    usedby   ::= &lt;method&gt; *
- *    method   ::= &lt;ref&gt;
+ *  calltree ::= &lt;using&gt; &lt;usedby&gt; using ::= &lt;method&gt; *
+ * usedby ::= &lt;method&gt; * method ::= &lt;ref&gt;
  * </pre>
  * 
  * The <code>using</code> element contains methods in the set of classes and
@@ -30,13 +38,12 @@ import aQute.bnd.osgi.Clazz.MethodDef;
  * {@link #writeCalltree(PrintWriter, Collection)}.
  */
 public class CalltreeResource extends WriteResource {
-	Collection<Clazz>	classes;
+	Collection<Clazz> classes;
 
 	/**
 	 * Create a resource for inclusion that will print a call tree.
 	 * 
-	 * @param values
-	 *            the classes for which the call tree is generated.
+	 * @param values the classes for which the call tree is generated.
 	 */
 	public CalltreeResource(Collection<Clazz> values) {
 		this.classes = values;
@@ -62,8 +69,7 @@ public class CalltreeResource extends WriteResource {
 		PrintWriter pw = new PrintWriter(osw);
 		try {
 			writeCalltree(pw, classes);
-		}
-		finally {
+		} finally {
 			pw.flush();
 		}
 	}
@@ -71,36 +77,31 @@ public class CalltreeResource extends WriteResource {
 	/**
 	 * Print the call tree in XML.
 	 * 
-	 * @param out
-	 *            The output writer
-	 * @param classes
-	 *            The set of classes
-	 * @throws IOException
-	 *             Any errors
+	 * @param out The output writer
+	 * @param classes The set of classes
+	 * @throws Exception Any errors
 	 */
 	public static void writeCalltree(PrintWriter out, Collection<Clazz> classes) throws Exception {
 
-		final Map<Clazz.MethodDef,Set<Clazz.MethodDef>> using = new TreeMap<Clazz.MethodDef,Set<Clazz.MethodDef>>(
-				COMPARATOR);
-		final Map<Clazz.MethodDef,Set<Clazz.MethodDef>> usedby = new TreeMap<Clazz.MethodDef,Set<Clazz.MethodDef>>(
-				COMPARATOR);
+		final Map<Clazz.MethodDef, Set<Clazz.MethodDef>> using = new TreeMap<>(COMPARATOR);
+		final Map<Clazz.MethodDef, Set<Clazz.MethodDef>> usedby = new TreeMap<>(COMPARATOR);
 
 		ClassDataCollector cd = new ClassDataCollector() {
-//			Clazz.MethodDef	source;
+			// Clazz.MethodDef source;
 
 			// Before a method is parsed
 			@Override
 			public void method(Clazz.MethodDef source) {
-//				this.source = source;
+				// this.source = source;
 				xref(using, source, null);
 				xref(usedby, source, null);
 			}
 
 			// For any reference in the previous method.
-//			public void reference(Clazz.MethodDef reference) {
-//				xref(using, source, reference);
-//				xref(usedby, reference, source);
-//			}
+			// public void reference(Clazz.MethodDef reference) {
+			// xref(using, source, reference);
+			// xref(usedby, reference, source);
+			// }
 		};
 		for (Clazz clazz : classes) {
 			clazz.parseClassFileWithCollector(cd);
@@ -115,20 +116,25 @@ public class CalltreeResource extends WriteResource {
 	/*
 	 * Add a new reference
 	 */
-	static Comparator<Clazz.MethodDef>	COMPARATOR	= new Comparator<Clazz.MethodDef>() {
+	static Comparator<Clazz.MethodDef> COMPARATOR = new Comparator<Clazz.MethodDef>() {
 
-														public int compare(MethodDef a, MethodDef b) {
-															int r = a.getName().compareTo(b.getName());
-															return r != 0 ? r : a.getDescriptor().toString()
-																	.compareTo(b.getDescriptor().toString());
-														}
-													};
+		@Override
+		public int compare(MethodDef a, MethodDef b) {
+			int r = a.getName()
+				.compareTo(b.getName());
+			return r != 0 ? r
+				: a.getDescriptor()
+					.toString()
+					.compareTo(b.getDescriptor()
+						.toString());
+		}
+	};
 
-	static void xref(Map<Clazz.MethodDef,Set<Clazz.MethodDef>> references, Clazz.MethodDef source,
-			Clazz.MethodDef reference) {
+	static void xref(Map<Clazz.MethodDef, Set<Clazz.MethodDef>> references, Clazz.MethodDef source,
+		Clazz.MethodDef reference) {
 		Set<Clazz.MethodDef> set = references.get(source);
 		if (set == null)
-			references.put(source, set = new TreeSet<Clazz.MethodDef>(COMPARATOR));
+			references.put(source, set = new TreeSet<>(COMPARATOR));
 		if (reference != null)
 			set.add(reference);
 	}
@@ -136,9 +142,9 @@ public class CalltreeResource extends WriteResource {
 	/*
 	 * Print out either using or usedby sets
 	 */
-	private static void xref(PrintWriter out, String group, Map<Clazz.MethodDef,Set<Clazz.MethodDef>> references) {
+	private static void xref(PrintWriter out, String group, Map<Clazz.MethodDef, Set<Clazz.MethodDef>> references) {
 		out.println("  <" + group + ">");
-		for (Map.Entry<Clazz.MethodDef,Set<Clazz.MethodDef>> entry : references.entrySet()) {
+		for (Map.Entry<Clazz.MethodDef, Set<Clazz.MethodDef>> entry : references.entrySet()) {
 			Clazz.MethodDef source = entry.getKey();
 			Set<Clazz.MethodDef> refs = entry.getValue();
 			method(out, "method", source, ">");
@@ -154,9 +160,10 @@ public class CalltreeResource extends WriteResource {
 	 * Print out a method.
 	 */
 	private static void method(PrintWriter out, String element, Clazz.MethodDef source, String closeElement) {
-		out.println("      <" + element + " class='" + source.getContainingClass().getFQN() + "'"
-				+ getAccess(source.getAccess()) + (source.isConstructor() ? "" : " name='" + source.getName() + "'")
-				+ " descriptor='" + source.getDescriptor() + "' pretty='" + source.toString() + "'" + closeElement);
+		out.println("      <" + element + " class='" + source.getContainingClass()
+			.getFQN() + "'" + getAccess(source.getAccess())
+			+ (source.isConstructor() ? "" : " name='" + source.getName() + "'") + " descriptor='"
+			+ source.getDescriptor() + "' pretty='" + source.toString() + "'" + closeElement);
 	}
 
 	private static String getAccess(int access) {

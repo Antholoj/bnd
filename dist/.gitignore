@@ -1,2 +1,4 @@
 /bundles/
-/repository.xml
+/bin/
+/bin_test/
+/generated/

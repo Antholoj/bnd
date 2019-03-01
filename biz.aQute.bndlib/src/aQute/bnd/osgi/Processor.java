@@ -1,75 +1,273 @@
 package aQute.bnd.osgi;
 
-import java.io.*;
-import java.net.*;
-import java.util.*;
-import java.util.Map.Entry;
-import java.util.concurrent.*;
-import java.util.jar.*;
-import java.util.regex.*;
+import static aQute.libg.slf4j.GradleLogging.LIFECYCLE;
+import static java.lang.invoke.MethodHandles.publicLookup;
+import static java.lang.invoke.MethodType.methodType;
+import static java.nio.charset.StandardCharsets.UTF_8;
+import static java.util.stream.Collectors.toList;
 
-import aQute.bnd.header.*;
-import aQute.bnd.service.*;
-import aQute.bnd.version.*;
-import aQute.lib.collections.*;
-import aQute.lib.io.*;
-import aQute.libg.generics.*;
-import aQute.service.reporter.*;
+import java.io.Closeable;
+import java.io.File;
+import java.io.FileNotFoundException;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.io.PrintStream;
+import java.lang.invoke.MethodType;
+import java.lang.reflect.Array;
+import java.lang.reflect.Field;
+import java.lang.reflect.InvocationTargetException;
+import java.net.MalformedURLException;
+import java.net.URI;
+import java.net.URL;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.attribute.FileTime;
+import java.util.ArrayDeque;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collection;
+import java.util.Collections;
+import java.util.HashSet;
+import java.util.Iterator;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Map.Entry;
+import java.util.Objects;
+import java.util.Optional;
+import java.util.Properties;
+import java.util.Random;
+import java.util.Set;
+import java.util.Spliterator;
+import java.util.TreeSet;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CopyOnWriteArraySet;
+import java.util.concurrent.Executor;
+import java.util.concurrent.Executors;
+import java.util.concurrent.RejectedExecutionHandler;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledThreadPoolExecutor;
+import java.util.concurrent.SynchronousQueue;
+import java.util.concurrent.ThreadFactory;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.jar.Attributes;
+import java.util.jar.Manifest;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+import java.util.stream.Stream;
+import java.util.stream.StreamSupport;
+
+import org.osgi.util.promise.PromiseFactory;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import aQute.bnd.header.Attrs;
+import aQute.bnd.header.OSGiHeader;
+import aQute.bnd.header.Parameters;
+import aQute.bnd.help.Syntax;
+import aQute.bnd.help.SyntaxAnnotation;
+import aQute.bnd.http.HttpClient;
+import aQute.bnd.service.Plugin;
+import aQute.bnd.service.Registry;
+import aQute.bnd.service.RegistryDonePlugin;
+import aQute.bnd.service.RegistryPlugin;
+import aQute.bnd.service.url.URLConnectionHandler;
+import aQute.bnd.version.Version;
+import aQute.bnd.version.VersionRange;
+import aQute.lib.collections.Iterables;
+import aQute.lib.exceptions.Exceptions;
+import aQute.lib.hex.Hex;
+import aQute.lib.io.IO;
+import aQute.lib.io.IOConstants;
+import aQute.lib.strings.Strings;
+import aQute.lib.utf8properties.UTF8Properties;
+import aQute.libg.cryptography.SHA1;
+import aQute.libg.generics.Create;
+import aQute.libg.reporter.ReporterAdapter;
+import aQute.service.reporter.Reporter;
 
 public class Processor extends Domain implements Reporter, Registry, Constants, Closeable {
+	private static final Logger	logger	= LoggerFactory.getLogger(Processor.class);
+	public static Reporter		log;;
 
-	static ThreadLocal<Processor>	current			= new ThreadLocal<Processor>();
-	static ExecutorService			executor		= Executors.newCachedThreadPool();
-	static Random					random			= new Random();
+	static {
+		ReporterAdapter reporterAdapter = new ReporterAdapter(System.out);
+		reporterAdapter.setTrace(true);
+		reporterAdapter.setExceptions(true);
+		reporterAdapter.setPedantic(true);
+		log = reporterAdapter;
+	}
 
+	static final int									BUFFER_SIZE			= IOConstants.PAGE_SIZE * 1;
+
+	static Pattern										PACKAGES_IGNORED	= Pattern
+		.compile("(java\\.lang\\.reflect|sun\\.reflect).*");
+
+	static ThreadLocal<Processor>						current				= new ThreadLocal<>();
+	private final static ScheduledThreadPoolExecutor	scheduledExecutor;
+	private final static ThreadPoolExecutor				executor;
+	static {
+		ThreadFactory defaultThreadFactory = Executors.defaultThreadFactory();
+		ThreadFactory threadFactory = (Runnable r) -> {
+			Thread t = defaultThreadFactory.newThread(r);
+			t.setName("Bnd-Processor," + t.getName());
+			t.setDaemon(true);
+			return t;
+		};
+		RejectedExecutionHandler handler = (Runnable r, ThreadPoolExecutor e) -> {
+			if (e.isShutdown()) {
+				return;
+			}
+			try {
+				r.run();
+			} catch (Throwable t) {
+				/*
+				 * We are stealing another's thread because we have hit max pool
+				 * size, so we cannot let the runnable's exception propagate
+				 * back up this thread.
+				 */
+				try {
+					Thread thread = Thread.currentThread();
+					thread.getUncaughtExceptionHandler()
+						.uncaughtException(thread, t);
+				} catch (Throwable for_real) {
+					// we will ignore this
+				}
+			}
+		};
+		executor = new ThreadPoolExecutor(0, 64, 60L, TimeUnit.SECONDS, new SynchronousQueue<>(), threadFactory,
+			handler);
+		scheduledExecutor = new ScheduledThreadPoolExecutor(4, threadFactory, handler);
+		scheduledExecutor.setExecuteExistingDelayedTasksAfterShutdownPolicy(false);
+		scheduledExecutor.setContinueExistingPeriodicTasksAfterShutdownPolicy(false);
+
+		// Handle shutting down executors via shutdown hook
+		AtomicBoolean shutdownHookInstalled = new AtomicBoolean();
+		ThreadFactory shutdownHookInstallerThreadFactory = (Runnable r) -> {
+			if (shutdownHookInstalled.compareAndSet(false, true)) {
+				executor.setThreadFactory(threadFactory);
+				scheduledExecutor.setThreadFactory(threadFactory);
+				Thread shutdownThread = defaultThreadFactory.newThread(() -> {
+					// limit new thread creation
+					executor.setMaximumPoolSize(Math.max(1, executor.getPoolSize()));
+					scheduledExecutor.shutdown();
+					try {
+						scheduledExecutor.awaitTermination(20, TimeUnit.SECONDS);
+					} catch (InterruptedException e) {
+						Thread.currentThread()
+							.interrupt();
+					}
+					executor.shutdown();
+					try {
+						executor.awaitTermination(20, TimeUnit.SECONDS);
+					} catch (InterruptedException e) {
+						Thread.currentThread()
+							.interrupt();
+					}
+				});
+				shutdownThread.setName("Bnd-ExecutorShutdownHook," + shutdownThread.getName());
+				try {
+					Runtime.getRuntime()
+						.addShutdownHook(shutdownThread);
+				} catch (IllegalStateException e) {
+					// VM is already shutting down...
+					executor.shutdown();
+					scheduledExecutor.shutdown();
+				}
+			}
+			return threadFactory.newThread(r);
+		};
+		executor.setThreadFactory(shutdownHookInstallerThreadFactory);
+		scheduledExecutor.setThreadFactory(shutdownHookInstallerThreadFactory);
+	}
+	private static PromiseFactory				promiseFactory	= new PromiseFactory(executor, scheduledExecutor);
+	static Random								random			= new Random();
 	// TODO handle include files out of date
-	// TODO make splitter skip eagerly whitespace so trim is not necessary
-	public final static String		LIST_SPLITTER	= "\\s*,\\s*";
-	final List<String>				errors			= new ArrayList<String>();
-	final List<String>				warnings		= new ArrayList<String>();
-	final Set<Object>				basicPlugins	= new HashSet<Object>();
-	private final Set<Closeable>	toBeClosed		= new HashSet<Closeable>();
-	Set<Object>						plugins;
+	public final static String					LIST_SPLITTER	= "\\s*,\\s*";
+	final List<String>							errors			= new ArrayList<>();
+	final List<String>							warnings		= new ArrayList<>();
+	final Set<Object>							basicPlugins	= new HashSet<>();
+	private final Set<Closeable>				toBeClosed		= new HashSet<>();
+	private Set<Object>							plugins;
 
-	boolean							pedantic;
-	boolean							trace;
-	boolean							exceptions;
-	boolean							fileMustExist	= true;
+	boolean										pedantic;
+	boolean										trace;
+	boolean										exceptions;
+	boolean										fileMustExist	= true;
 
-	private File					base			= new File("").getAbsoluteFile();
+	private File								base			= new File("").getAbsoluteFile();
+	private URI									baseURI			= base.toURI();
 
-	Properties						properties;
-	String							profile;
-	private Macro					replacer;
-	private long					lastModified;
-	private File					propertiesFile;
-	private boolean					fixup			= true;
-	long							modified;
-	Processor						parent;
-	List<File>						included;
+	Properties									properties;
+	String										profile;
+	private Macro								replacer;
+	private long								lastModified;
+	private File								propertiesFile;
+	private boolean								fixup			= true;
+	long										modified;
+	Processor									parent;
+	private final CopyOnWriteArrayList<File>	included		= new CopyOnWriteArrayList<>();
 
-	CL								pluginLoader;
-	Collection<String>				filter;
-	HashSet<String>					missingCommand;
+	CL											pluginLoader;
+	Collection<String>							filter;
+	HashSet<String>								missingCommand;
+	Boolean										strict;
+	boolean										fixupMessages;
+
+	public static class FileLine {
+		public static final FileLine	DUMMY	= new FileLine(null, 0, 0);
+		public File						file;
+		public int						line;
+		public int						length;
+		public int						start;
+		public int						end;
+
+		public FileLine() {
+
+		}
+
+		public FileLine(File file, int line, int length) {
+			this.file = file;
+			this.line = line;
+			this.length = length;
+
+		}
+
+		public void set(SetLocation sl) {
+			sl.file(IO.absolutePath(file));
+			sl.line(line);
+			sl.length(length);
+		}
+	}
 
 	public Processor() {
-		properties = new Properties();
+		properties = new UTF8Properties();
 	}
 
 	public Processor(Properties parent) {
-		properties = new Properties(parent);
+		properties = new UTF8Properties(parent);
 	}
 
-	public Processor(Processor child) {
-		this(child.properties);
-		this.parent = child;
+	public Processor(Processor processor) {
+		this(processor.getProperties0());
+		this.parent = processor;
+	}
+
+	public Processor(Properties props, boolean copy) {
+		if (copy)
+			properties = new UTF8Properties(props);
+		else
+			properties = props;
 	}
 
 	public void setParent(Processor processor) {
 		this.parent = processor;
-		Properties ext = new Properties(processor.properties);
-		ext.putAll(this.properties);
-		this.properties = ext;
+		Properties updated = new UTF8Properties(processor.getProperties0());
+		updated.putAll(getProperties0());
+		properties = updated;
 	}
 
 	public Processor getParent() {
@@ -83,30 +281,49 @@ public class Processor extends Domain implements Reporter, Registry, Constants, 
 	}
 
 	public void getInfo(Reporter processor, String prefix) {
+		if (prefix == null)
+			prefix = getBase() + " :";
 		if (isFailOk())
-			addAll(warnings, processor.getErrors(), prefix);
+			addAll(warnings, processor.getErrors(), prefix, processor);
 		else
-			addAll(errors, processor.getErrors(), prefix);
-		addAll(warnings, processor.getWarnings(), prefix);
+			addAll(errors, processor.getErrors(), prefix, processor);
+		addAll(warnings, processor.getWarnings(), prefix, processor);
 
-		processor.getErrors().clear();
-		processor.getWarnings().clear();
+		processor.getErrors()
+			.clear();
+		processor.getWarnings()
+			.clear();
+
 	}
 
 	public void getInfo(Reporter processor) {
 		getInfo(processor, "");
 	}
 
-	private <T> void addAll(List<String> to, List< ? extends T> from, String prefix) {
-		for (T x : from) {
-			to.add(prefix + x);
+	private void addAll(List<String> to, List<String> from, String prefix, Reporter reporter) {
+		try {
+			for (String message : from) {
+				String newMessage = prefix.isEmpty() ? message : prefix + message;
+				to.add(newMessage);
+
+				Location location = reporter.getLocation(message);
+				if (location != null) {
+					SetLocation newer = location(newMessage);
+					for (Field f : newer.getClass()
+						.getFields()) {
+						if (!"message".equals(f.getName())) {
+							f.set(newer, f.get(location));
+						}
+					}
+				}
+			}
+		} catch (Exception e) {
+			throw Exceptions.duck(e);
 		}
 	}
 
 	/**
 	 * A processor can mark itself current for a thread.
-	 * 
-	 * @return
 	 */
 	private Processor current() {
 		Processor p = current.get();
@@ -115,77 +332,135 @@ public class Processor extends Domain implements Reporter, Registry, Constants, 
 		return p;
 	}
 
+	@Override
 	public SetLocation warning(String string, Object... args) {
+		fixupMessages = false;
 		Processor p = current();
 		String s = formatArrays(string, args);
 		if (!p.warnings.contains(s))
 			p.warnings.add(s);
 		p.signal();
-		return location(s);
+		return p.location(s);
 	}
 
+	@Override
 	public SetLocation error(String string, Object... args) {
+		fixupMessages = false;
 		Processor p = current();
 		try {
+
+			//
+			// Make Throwables into a string that shows their causes
+			//
+
+			for (int i = 0; i < args.length; i++) {
+				if (args[i] instanceof Throwable) {
+					args[i] = Exceptions.causes((Throwable) args[i]);
+				}
+			}
 			if (p.isFailOk())
 				return p.warning(string, args);
-			String s = formatArrays(string, args == null ? new Object[0] : args);
+			String s = formatArrays(string, args);
 			if (!p.errors.contains(s))
 				p.errors.add(s);
-			return location(s);
-		}
-		finally {
+			return p.location(s);
+		} finally {
 			p.signal();
 		}
 	}
 
+	/**
+	 * @deprecated Use SLF4J
+	 *             Logger.info(aQute.libg.slf4j.GradleLogging.LIFECYCLE)
+	 *             instead.
+	 */
+	@Override
+	@Deprecated
 	public void progress(float progress, String format, Object... args) {
-		format = String.format("[%2d] %s", (int) progress, format);
-		trace(format, args);
+		Logger l = getLogger();
+		if (l.isInfoEnabled(LIFECYCLE)) {
+			String message = formatArrays(format, args);
+			if (progress > 0)
+				l.info(LIFECYCLE, "[{}] {}", (int) progress, message);
+			else
+				l.info(LIFECYCLE, "{}", message);
+		}
 	}
 
 	public void progress(String format, Object... args) {
 		progress(-1f, format, args);
 	}
 
-	public SetLocation exception(Throwable t, String format, Object... args) {
-		return error(format, t, args);
+	public SetLocation error(String format, Throwable t, Object... args) {
+		return exception(t, format, args);
 	}
 
-	public SetLocation error(String string, Throwable t, Object... args) {
+	@Override
+	public SetLocation exception(Throwable t, String format, Object... args) {
 		Processor p = current();
-		try {
-			if (p.exceptions)
-				t.printStackTrace();
-			if (p.isFailOk()) {
-				return p.warning(string + ": " + t, args);
-			}
-			p.errors.add("Exception: " + t.getMessage());
-			String s = formatArrays(string, args == null ? new Object[0] : args);
-			if (!p.errors.contains(s))
-				p.errors.add(s);
-			return location(s);
+		if (p.trace) {
+			p.getLogger()
+				.info("Reported exception {}", Exceptions.causes(t), t);
+		} else {
+			p.getLogger()
+				.debug("Reported exception {}", Exceptions.causes(t), t);
 		}
-		finally {
-			p.signal();
+		if (p.exceptions) {
+			printExceptionSummary(t, System.err);
 		}
+		// unroll InvocationTargetException
+		t = Exceptions.unrollCause(t, InvocationTargetException.class);
+		String s = formatArrays("Exception: %s", Exceptions.toString(t));
+		if (p.isFailOk()) {
+			p.warnings.add(s);
+		} else {
+			p.errors.add(s);
+		}
+		return error(format, args);
+	}
+
+	public int printExceptionSummary(Throwable e, PrintStream out) {
+		if (e == null) {
+			return 0;
+		}
+		int count = 10;
+		int n = printExceptionSummary(e.getCause(), out);
+
+		if (n == 0) {
+			out.println("Root cause: " + e.getMessage() + "   :" + e.getClass()
+				.getName());
+			count = Integer.MAX_VALUE;
+		} else {
+			out.println("Rethrown from: " + e.toString());
+		}
+		out.println();
+		printStackTrace(e, count, out);
+		System.err.println();
+		return n + 1;
+	}
+
+	public void printStackTrace(Throwable e, int count, PrintStream out) {
+		e.printStackTrace(out);
 	}
 
 	public void signal() {}
 
+	@Override
 	public List<String> getWarnings() {
+		fixupMessages();
 		return warnings;
 	}
 
+	@Override
 	public List<String> getErrors() {
+		fixupMessages();
 		return errors;
 	}
 
 	/**
 	 * Standard OSGi header parser.
-	 * 
+	 *
 	 * @param value
-	 * @return
 	 */
 	static public Parameters parseHeader(String value, Processor logger) {
 		return new Parameters(value, logger);
@@ -205,6 +480,7 @@ public class Processor extends Domain implements Reporter, Registry, Constants, 
 		toBeClosed.remove(jar);
 	}
 
+	@Override
 	public boolean isPedantic() {
 		return current().pedantic;
 	}
@@ -216,7 +492,7 @@ public class Processor extends Domain implements Reporter, Registry, Constants, 
 	public void use(Processor reporter) {
 		setPedantic(reporter.isPedantic());
 		setTrace(reporter.isTrace());
-		setBase(reporter.getBase());
+		setExceptions(reporter.isExceptions());
 		setFailOk(reporter.isFailOk());
 	}
 
@@ -230,35 +506,32 @@ public class Processor extends Domain implements Reporter, Registry, Constants, 
 
 	/**
 	 * Return a list of plugins that implement the given class.
-	 * 
-	 * @param clazz
-	 *            Each returned plugin implements this class/interface
+	 *
+	 * @param clazz Each returned plugin implements this class/interface
 	 * @return A list of plugins
 	 */
+	@Override
 	public <T> List<T> getPlugins(Class<T> clazz) {
-		List<T> l = new ArrayList<T>();
-		Set<Object> all = getPlugins();
-		for (Object plugin : all) {
-			if (clazz.isInstance(plugin))
-				l.add(clazz.cast(plugin));
-		}
-		return l;
+		List<T> plugins = getPlugins().stream()
+			.filter(clazz::isInstance)
+			.map(clazz::cast)
+			.collect(toList());
+		return plugins;
 	}
 
 	/**
 	 * Returns the first plugin it can find of the given type.
-	 * 
+	 *
 	 * @param <T>
 	 * @param clazz
-	 * @return
 	 */
+	@Override
 	public <T> T getPlugin(Class<T> clazz) {
-		Set<Object> all = getPlugins();
-		for (Object plugin : all) {
-			if (clazz.isInstance(plugin))
-				return clazz.cast(plugin);
-		}
-		return null;
+		Optional<T> plugin = getPlugins().stream()
+			.filter(clazz::isInstance)
+			.map(clazz::cast)
+			.findFirst();
+		return plugin.orElse(null);
 	}
 
 	/**
@@ -266,139 +539,328 @@ public class Processor extends Domain implements Reporter, Registry, Constants, 
 	 * They are class names, optionally associated with attributes. Plugins can
 	 * implement the Plugin interface to see these attributes. Any object can be
 	 * a plugin.
-	 * 
-	 * @return
 	 */
-	protected synchronized Set<Object> getPlugins() {
-		if (this.plugins != null)
-			return this.plugins;
+	public Set<Object> getPlugins() {
+		Set<Object> p;
+		synchronized (this) {
+			p = plugins;
+			if (p != null)
+				return p;
 
-		missingCommand = new HashSet<String>();
-		Set<Object> list = new LinkedHashSet<Object>();
-
-		// The owner of the plugin is always in there.
-		list.add(this);
-		setTypeSpecificPlugins(list);
-
-		if (parent != null)
-			list.addAll(parent.getPlugins());
-
+			plugins = p = new CopyOnWriteArraySet<>();
+			missingCommand = new HashSet<>();
+		}
 		// We only use plugins now when they are defined on our level
 		// and not if it is in our parent. We inherit from our parent
 		// through the previous block.
 
-		if (properties.containsKey(PLUGIN)) {
-			String spe = getProperty(PLUGIN);
-			if (spe.equals(NONE))
-				return new LinkedHashSet<Object>();
+		String spe = getProperty(PLUGIN);
+		if (NONE.equals(spe))
+			return p;
 
-			String pluginPath = getProperty(PLUGINPATH);
-			loadPlugins(list, spe, pluginPath);
+		// The owner of the plugin is always in there.
+		p.add(this);
+		setTypeSpecificPlugins(p);
+
+		if (parent != null)
+			p.addAll(parent.getPlugins());
+
+		//
+		// Look only local
+		//
+
+		spe = mergeLocalProperties(PLUGIN);
+		String pluginPath = mergeProperties(PLUGINPATH);
+		loadPlugins(p, spe, pluginPath);
+
+		addExtensions(p);
+
+		for (RegistryDonePlugin rdp : getPlugins(RegistryDonePlugin.class)) {
+			try {
+				rdp.done();
+			} catch (Exception e) {
+				error("Calling done on %s, gives an exception %s", rdp, e);
+			}
 		}
-
-		return this.plugins = list;
+		return p;
 	}
 
 	/**
-	 * @param list
-	 * @param spe
+	 * Is called when all plugins are loaded
+	 *
+	 * @param p
 	 */
-	protected void loadPlugins(Set<Object> list, String spe, String pluginPath) {
-		Parameters plugins = new Parameters(spe);
+	protected void addExtensions(Set<Object> p) {
+
+	}
+
+	/**
+	 * Magic to load the plugins. This is quite tricky actually since we allow
+	 * plugins to be downloaded (this is mainly intended for repositories since
+	 * in general plugins should use extensions, however to bootstrap the
+	 * extensions we need more). Since downloads might need plugins for
+	 * passwords and protocols we need to first load the paths specified on the
+	 * plugin clause, then check if there are any local plugins (starting with
+	 * aQute.bnd and be able to load from our own class loader).
+	 * <p>
+	 * After that, we load the plugin paths, these can use the built in
+	 * connectors.
+	 * <p>
+	 * Last but not least, we load the remaining plugins.
+	 *
+	 * @param instances
+	 * @param pluginString
+	 */
+	protected void loadPlugins(Set<Object> instances, String pluginString, String pluginPathString) {
+		Parameters plugins = new Parameters(pluginString, this, true);
 		CL loader = getLoader();
 
 		// First add the plugin-specific paths from their path: directives
-		for (Entry<String,Attrs> entry : plugins.entrySet()) {
+		for (Entry<String, Attrs> entry : plugins.entrySet()) {
 			String key = removeDuplicateMarker(entry.getKey());
-			String path = entry.getValue().get(PATH_DIRECTIVE);
+			String path = entry.getValue()
+				.get(PATH_DIRECTIVE);
 			if (path != null) {
 				String parts[] = path.split("\\s*,\\s*");
 				try {
 					for (String p : parts) {
 						File f = getFile(p).getAbsoluteFile();
-						loader.add(f.toURI().toURL());
+						loader.add(f);
 					}
-				}
-				catch (Exception e) {
+				} catch (Exception e) {
 					error("Problem adding path %s to loader for plugin %s. Exception: (%s)", path, key, e);
 				}
 			}
 		}
 
-		// Next add -pluginpath entries
-		if (pluginPath != null && pluginPath.length() > 0) {
-			StringTokenizer tokenizer = new StringTokenizer(pluginPath, ",");
-			while (tokenizer.hasMoreTokens()) {
-				String path = tokenizer.nextToken().trim();
-				try {
-					File f = getFile(path).getAbsoluteFile();
-					loader.add(f.toURI().toURL());
-				}
-				catch (Exception e) {
-					error("Problem adding path %s from global plugin path. Exception: %s", path, e);
-				}
+		//
+		// Try to load any plugins that are local
+		// these must start with aQute.bnd.* and
+		// and be possible to load. The main intention
+		// of this code is to load the URL connectors so that
+		// any access to remote plugins can use the connector
+		// model.
+		//
+
+		Set<String> loaded = new HashSet<>();
+		for (Entry<String, Attrs> entry : plugins.entrySet()) {
+			String className = removeDuplicateMarker(entry.getKey());
+			Attrs attrs = entry.getValue();
+
+			logger.debug("Trying pre-plugin {}", className);
+
+			Object plugin = loadPlugin(getClass().getClassLoader(), attrs, className, true);
+			if (plugin != null) {
+				// with the marker!!
+				loaded.add(entry.getKey());
+				instances.add(plugin);
 			}
 		}
 
-		// Load the plugins
-		for (Entry<String,Attrs> entry : plugins.entrySet()) {
-			String key = entry.getKey();
+		//
+		// Make sure we load each plugin only once
+		// by removing the entries that were successfully loaded
+		//
+		plugins.keySet()
+			.removeAll(loaded);
 
-			try {
-				trace("Using plugin %s", key);
+		loadPluginPath(instances, pluginPathString, loader);
 
-				// Plugins could use the same class with different
-				// parameters so we could have duplicate names Remove
-				// the ! added by the parser to make each name unique.
-				key = removeDuplicateMarker(key);
+		//
+		// Load the remaining plugins
+		//
 
-				try {
-					Class< ? > c = loader.loadClass(key);
-					Object plugin = c.newInstance();
-					customize(plugin, entry.getValue());
-					if (plugin instanceof Closeable) {
-						addClose((Closeable) plugin);
-					}
-					list.add(plugin);
+		for (Entry<String, Attrs> entry : plugins.entrySet()) {
+			String className = removeDuplicateMarker(entry.getKey());
+			Attrs attrs = entry.getValue();
+
+			logger.debug("Loading secondary plugin {}", className);
+
+			// We can defer the error if the plugin specifies
+			// a command name. In that case, we'll verify that
+			// a bnd file does not contain any references to a
+			// plugin
+			// command. The reason this feature was added was
+			// to compile plugin classes with the same build.
+			String commands = attrs.get(COMMAND_DIRECTIVE);
+
+			Object plugin = loadPlugin(loader, attrs, className, commands != null);
+			if (plugin != null)
+				instances.add(plugin);
+			else {
+				if (commands == null)
+					error("Cannot load the plugin %s", className);
+				else {
+					Collection<String> cs = split(commands);
+					missingCommand.addAll(cs);
 				}
-				catch (Throwable t) {
-					// We can defer the error if the plugin specifies
-					// a command name. In that case, we'll verify that
-					// a bnd file does not contain any references to a
-					// plugin
-					// command. The reason this feature was added was
-					// to compile plugin classes with the same build.
-					String commands = entry.getValue().get(COMMAND_DIRECTIVE);
-					if (commands == null)
-						error("Problem loading the plugin: %s exception: (%s)", key, t);
-					else {
-						Collection<String> cs = split(commands);
-						missingCommand.addAll(cs);
-					}
-				}
-			}
-			catch (Throwable e) {
-				error("Problem loading the plugin: %s exception: (%s)", key, e);
 			}
 		}
 	}
 
+	/**
+	 * Add the @link {@link Constants#PLUGINPATH} entries (which are file names)
+	 * to the class loader. If this file does not exist, and there is a
+	 * {@link Constants#PLUGINPATH_URL_ATTR} attribute then we download it first
+	 * from that url. You can then also specify a
+	 * {@link Constants#PLUGINPATH_SHA1_ATTR} attribute to verify the file.
+	 *
+	 * @see PLUGINPATH
+	 * @param pluginPath the clauses for the plugin path
+	 * @param loader The class loader to extend
+	 */
+	private void loadPluginPath(Set<Object> instances, String pluginPath, CL loader) {
+		Parameters pluginpath = new Parameters(pluginPath, this);
+		HttpClient client = null;
+		try {
+			nextClause: for (Entry<String, Attrs> entry : pluginpath.entrySet()) {
+
+				File f = getFile(entry.getKey()).getAbsoluteFile();
+				if (!f.isFile()) {
+
+					//
+					// File does not exist! Check if we need to download
+					//
+
+					String url = entry.getValue()
+						.get(PLUGINPATH_URL_ATTR);
+					if (url != null) {
+						try {
+							logger.debug("downloading {} to {}", url, f.getAbsoluteFile());
+							URL u = new URL(url);
+							if (client == null) {
+								@SuppressWarnings("resource")
+								HttpClient c = new HttpClient();
+								c.setRegistry(this);
+								c.readSettings(this);
+
+								//
+								// Allow the URLCOnnectionHandlers to interact
+								// with the
+								// connection so they can sign it or decorate it
+								// with
+								// a password etc.
+								//
+								instances.stream()
+									.filter(URLConnectionHandler.class::isInstance)
+									.map(URLConnectionHandler.class::cast)
+									.forEach(c::addURLConnectionHandler);
+								client = c;
+							}
+
+							//
+							// Copy the url to the file
+							//
+							IO.mkdirs(f.getParentFile());
+							try (Resource resource = Resource.fromURL(u, client)) {
+								try (OutputStream out = IO.outputStream(f)) {
+									resource.write(out);
+								}
+								long lastModified = resource.lastModified();
+								if (lastModified > 0L) {
+									f.setLastModified(lastModified);
+								}
+							}
+
+							//
+							// If there is a sha specified, we verify the
+							// download
+							// of the
+							// the file.
+							//
+							String digest = entry.getValue()
+								.get(PLUGINPATH_SHA1_ATTR);
+							if (digest != null) {
+								if (Hex.isHex(digest.trim())) {
+									byte[] sha1 = Hex.toByteArray(digest);
+									byte[] filesha1 = SHA1.digest(f)
+										.digest();
+									if (!Arrays.equals(sha1, filesha1)) {
+										error(
+											"Plugin path: %s, specified url %s and a sha1 but the file does not match the sha",
+											entry.getKey(), url);
+									}
+								} else {
+									error(
+										"Plugin path: %s, specified url %s and a sha1 '%s' but this is not a hexadecimal",
+										entry.getKey(), url, digest);
+								}
+							}
+						} catch (Exception e) {
+							exception(e, "Failed to download plugin %s from %s, error %s", entry.getKey(), url, e);
+							continue nextClause;
+						}
+					} else {
+						error("No such file %s from %s and no 'url' attribute on the path so it can be downloaded",
+							entry.getKey(), this);
+						continue nextClause;
+					}
+				}
+				logger.debug("Adding {} to loader for plugins", f);
+				loader.add(f);
+			}
+		} finally {
+			IO.close(client);
+		}
+	}
+
+	/**
+	 * Load a plugin and customize it. If the plugin cannot be loaded then we
+	 * return null.
+	 *
+	 * @param loader Name of the loader
+	 * @param attrs
+	 * @param className
+	 */
+	private Object loadPlugin(ClassLoader loader, Attrs attrs, String className, boolean ignoreError) {
+		try {
+			Class<?> c = loader.loadClass(className);
+			Object plugin = publicLookup().findConstructor(c, defaultConstructor)
+				.invoke();
+			customize(plugin, attrs);
+			if (plugin instanceof Closeable) {
+				addClose((Closeable) plugin);
+			}
+			return plugin;
+		} catch (NoClassDefFoundError e) {
+			if (!ignoreError)
+				exception(e, "Failed to load plugin %s;%s, error: %s ", className, attrs, e);
+		} catch (ClassNotFoundException e) {
+			if (!ignoreError)
+				exception(e, "Failed to load plugin %s;%s, error: %s ", className, attrs, e);
+		} catch (Error e) {
+			throw e;
+		} catch (Throwable e) {
+			exception(e, "Unexpected error loading plugin %s-%s: %s", className, attrs, e);
+		}
+		return null;
+	}
+
+	private static final MethodType defaultConstructor = methodType(void.class);
+
 	protected void setTypeSpecificPlugins(Set<Object> list) {
-		list.add(executor);
+		list.add(getExecutor());
+		list.add(getPromiseFactory());
 		list.add(random);
 		list.addAll(basicPlugins);
 	}
 
 	/**
+	 * Set the initial parameters of a plugin
+	 *
 	 * @param plugin
-	 * @param entry
+	 * @param map
 	 */
 	protected <T> T customize(T plugin, Attrs map) {
 		if (plugin instanceof Plugin) {
-			if (map != null)
-				((Plugin) plugin).setProperties(map);
-
 			((Plugin) plugin).setReporter(this);
+			try {
+				if (map == null)
+					map = Attrs.EMPTY_ATTRS;
+				((Plugin) plugin).setProperties(map);
+			} catch (Exception e) {
+				error("While setting properties %s on plugin %s, %s", map, plugin, e);
+			}
 		}
 		if (plugin instanceof RegistryPlugin) {
 			((RegistryPlugin) plugin).setRegistry(this);
@@ -406,9 +868,14 @@ public class Processor extends Domain implements Reporter, Registry, Constants, 
 		return plugin;
 	}
 
+	/**
+	 * Indicates that this run should ignore errors and succeed anyway
+	 *
+	 * @return true if this processor should return errors
+	 */
 	@Override
 	public boolean isFailOk() {
-		String v = getProperty(Analyzer.FAIL_OK, null);
+		String v = getProperty(Constants.FAIL_OK, null);
 		return v != null && v.equalsIgnoreCase("true");
 	}
 
@@ -416,74 +883,161 @@ public class Processor extends Domain implements Reporter, Registry, Constants, 
 		return base;
 	}
 
+	public URI getBaseURI() {
+		return baseURI;
+	}
+
 	public void setBase(File base) {
-		this.base = base;
+		if (base == null) {
+			this.base = null;
+			baseURI = null;
+		} else {
+			this.base = base.getAbsoluteFile();
+			baseURI = base.toURI();
+		}
 	}
 
 	public void clear() {
 		errors.clear();
 		warnings.clear();
+		locations.clear();
+		fixupMessages = false;
 	}
 
+	public Logger getLogger() {
+		return logger;
+	}
+
+	/**
+	 * @deprecated Use SLF4J Logger.debug instead.
+	 */
+	@Override
+	@Deprecated
 	public void trace(String msg, Object... parms) {
 		Processor p = current();
+		Logger l = p.getLogger();
 		if (p.trace) {
-			System.err.printf("# " + msg + "%n", parms);
+			if (l.isInfoEnabled()) {
+				l.info("{}", formatArrays(msg, parms));
+			}
+		} else {
+			if (l.isDebugEnabled()) {
+				l.debug("{}", formatArrays(msg, parms));
+			}
 		}
 	}
 
 	public <T> List<T> newList() {
-		return new ArrayList<T>();
+		return new ArrayList<>();
 	}
 
 	public <T> Set<T> newSet() {
-		return new TreeSet<T>();
+		return new TreeSet<>();
 	}
 
-	public static <K, V> Map<K,V> newMap() {
-		return new LinkedHashMap<K,V>();
+	public static <K, V> Map<K, V> newMap() {
+		return new LinkedHashMap<>();
 	}
 
-	public static <K, V> Map<K,V> newHashMap() {
-		return new LinkedHashMap<K,V>();
+	public static <K, V> Map<K, V> newHashMap() {
+		return new LinkedHashMap<>();
 	}
 
 	public <T> List<T> newList(Collection<T> t) {
-		return new ArrayList<T>(t);
+		return new ArrayList<>(t);
 	}
 
 	public <T> Set<T> newSet(Collection<T> t) {
-		return new TreeSet<T>(t);
+		return new TreeSet<>(t);
 	}
 
-	public <K, V> Map<K,V> newMap(Map<K,V> t) {
-		return new LinkedHashMap<K,V>(t);
+	public <K, V> Map<K, V> newMap(Map<K, V> t) {
+		return new LinkedHashMap<>(t);
 	}
 
-	public void close() {
+	@Override
+	public void close() throws IOException {
 		for (Closeable c : toBeClosed) {
-			try {
-				c.close();
-			}
-			catch (IOException e) {
-				// Who cares?
-			}
+			IO.close(c);
 		}
+		synchronized (this) {
+			plugins = null;
+		}
+		if (pluginLoader != null) {
+			IO.close(pluginLoader);
+			pluginLoader = null;
+		}
+
 		toBeClosed.clear();
 	}
 
-	public String _basedir(@SuppressWarnings("unused")
-	String args[]) {
+	public String _basedir(@SuppressWarnings("unused") String args[]) {
 		if (base == null)
 			throw new IllegalArgumentException("No base dir set");
 
-		return base.getAbsolutePath();
+		return IO.absolutePath(base);
+	}
+
+	public String _propertiesname(String[] args) {
+		if (args.length > 1) {
+			error("propertiesname does not take arguments");
+			return null;
+		}
+
+		File pf = getPropertiesFile();
+		if (pf == null)
+			return "";
+
+		return pf.getName();
+	}
+
+	public String _propertiesdir(String[] args) {
+		if (args.length > 1) {
+			error("propertiesdir does not take arguments");
+			return null;
+		}
+		File pf = getPropertiesFile();
+		if (pf == null)
+			return "";
+
+		return IO.absolutePath(pf.getParentFile());
+	}
+
+	static final String _uriHelp = "${uri;<uri>[;<baseuri>]}, Resolve the uri against the baseuri. baseuri defaults to the processor base.";
+
+	public String _uri(String args[]) throws Exception {
+		Macro.verifyCommand(args, _uriHelp, null, 2, 3);
+
+		URI uri = new URI(args[1]);
+		if (!uri.isAbsolute() || uri.getScheme()
+			.equals("file")) {
+			URI base;
+			if (args.length > 2) {
+				base = new URI(args[2]);
+			} else {
+				base = getBaseURI();
+				if (base == null) {
+					throw new IllegalArgumentException("No base dir set");
+				}
+			}
+			uri = base.resolve(uri.getSchemeSpecificPart());
+		}
+		return uri.toString();
+	}
+
+	static final String _fileuriHelp = "${fileuri;<path>}, Return a file uri for the specified path. Relative paths are resolved against the processor base.";
+
+	public String _fileuri(String args[]) throws Exception {
+		Macro.verifyCommand(args, _fileuriHelp, null, 2, 2);
+
+		File f = IO.getFile(getBase(), args[1])
+			.getCanonicalFile();
+		return f.toURI()
+			.toString();
 	}
 
 	/**
 	 * Property handling ...
-	 * 
-	 * @return
 	 */
 
 	public Properties getProperties() {
@@ -491,7 +1045,11 @@ public class Processor extends Domain implements Reporter, Registry, Constants, 
 			fixup = false;
 			begin();
 		}
+		fixupMessages = false;
+		return getProperties0();
+	}
 
+	private Properties getProperties0() {
 		return properties;
 	}
 
@@ -504,21 +1062,19 @@ public class Processor extends Domain implements Reporter, Registry, Constants, 
 			try {
 				Properties properties = loadProperties(file);
 				mergeProperties(properties, override);
-			}
-			catch (Exception e) {
-				error("Error loading properties file: " + file);
+			} catch (Exception e) {
+				error("Error loading properties file: %s", file);
 			}
 		} else {
 			if (!file.exists())
-				error("Properties file does not exist: " + file);
+				error("Properties file does not exist: %s", file);
 			else
-				error("Properties file must a file, not a directory: " + file);
+				error("Properties file must a file, not a directory: %s", file);
 		}
 	}
 
 	public void mergeProperties(Properties properties, boolean override) {
-		for (Enumeration< ? > e = properties.propertyNames(); e.hasMoreElements();) {
-			String key = (String) e.nextElement();
+		for (String key : Iterables.iterable(properties.propertyNames(), String.class::cast)) {
 			String value = properties.getProperty(key);
 			if (override || !getProperties().containsKey(key))
 				setProperty(key, value);
@@ -527,7 +1083,14 @@ public class Processor extends Domain implements Reporter, Registry, Constants, 
 
 	public void setProperties(Properties properties) {
 		doIncludes(getBase(), properties);
-		this.properties.putAll(properties);
+		getProperties0().putAll(properties);
+		mergeProperties(Constants.INIT); // execute macros in -init
+		getProperties0().remove(Constants.INIT);
+	}
+
+	public void setProperties(File base, Properties properties) {
+		doIncludes(base, properties);
+		getProperties0().putAll(properties);
 	}
 
 	public void addProperties(File file) throws Exception {
@@ -536,23 +1099,30 @@ public class Processor extends Domain implements Reporter, Registry, Constants, 
 		setProperties(p);
 	}
 
-	public void addProperties(Map< ? , ? > properties) {
-		for (Entry< ? , ? > entry : properties.entrySet()) {
-			setProperty(entry.getKey().toString(), entry.getValue() + "");
+	public void addProperties(Map<?, ?> properties) {
+		for (Entry<?, ?> entry : properties.entrySet()) {
+			setProperty(entry.getKey()
+				.toString(), String.valueOf(entry.getValue()));
 		}
 	}
 
-	public synchronized void addIncluded(File file) {
-		if (included == null)
-			included = new ArrayList<File>();
-		included.add(file);
+	public void addIncluded(File file) {
+		addIncludedIfAbsent(file);
+	}
+
+	private boolean addIncludedIfAbsent(File file) {
+		return included.addIfAbsent(file);
+	}
+
+	private boolean removeIncluded(File file) {
+		return included.remove(file);
 	}
 
 	/**
 	 * Inspect the properties and if you find -includes parse the line included
 	 * manifest files or properties files. The files are relative from the given
 	 * base, this is normally the base for the analyzer.
-	 * 
+	 *
 	 * @param ubase
 	 * @param p
 	 * @param done
@@ -565,7 +1135,7 @@ public class Processor extends Domain implements Reporter, Registry, Constants, 
 		if (includes != null) {
 			includes = getReplacer().process(includes);
 			p.remove(INCLUDE);
-			Collection<String> clauses = new Parameters(includes).keySet();
+			Collection<String> clauses = new Parameters(includes, this).keySet();
 
 			for (String value : clauses) {
 				boolean fileMustExist = true;
@@ -573,24 +1143,50 @@ public class Processor extends Domain implements Reporter, Registry, Constants, 
 				while (true) {
 					if (value.startsWith("-")) {
 						fileMustExist = false;
-						value = value.substring(1).trim();
+						value = value.substring(1)
+							.trim();
 					} else if (value.startsWith("~")) {
 						// Overwrite properties!
 						overwrite = false;
-						value = value.substring(1).trim();
+						value = value.substring(1)
+							.trim();
 					} else
 						break;
 				}
 				try {
 					File file = getFile(ubase, value).getAbsoluteFile();
-					if (!file.isFile() && fileMustExist) {
-						error("Included file " + file + (file.exists() ? " does not exist" : " is directory"));
+					if (!file.isFile()) {
+						try {
+							URL url = new URL(value);
+							int n = value.lastIndexOf('.');
+							String ext = ".jar";
+							if (n >= 0)
+								ext = value.substring(n);
+
+							Path tmp = Files.createTempFile("url", ext);
+							try (Resource resource = Resource.fromURL(url, getPlugin(HttpClient.class))) {
+								try (OutputStream out = IO.outputStream(tmp)) {
+									resource.write(out);
+								}
+								Files.setLastModifiedTime(tmp, FileTime.fromMillis(resource.lastModified()));
+								doIncludeFile(tmp.toFile(), overwrite, p);
+							} finally {
+								removeIncluded(tmp.toFile());
+								IO.delete(tmp);
+							}
+						} catch (MalformedURLException mue) {
+							if (fileMustExist)
+								error("Included file %s %s", file,
+									(file.isDirectory() ? "is directory" : "does not exist"));
+						} catch (Exception e) {
+							if (fileMustExist)
+								exception(e, "Error in processing included URL: %s", value);
+						}
 					} else
 						doIncludeFile(file, overwrite, p);
-				}
-				catch (Exception e) {
+				} catch (Exception e) {
 					if (fileMustExist)
-						error("Error in processing included file: " + value, e);
+						exception(e, "Error in processing included file: %s", value);
 				}
 			}
 		}
@@ -598,8 +1194,6 @@ public class Processor extends Domain implements Reporter, Registry, Constants, 
 
 	/**
 	 * @param file
-	 * @param parent
-	 * @param done
 	 * @param overwrite
 	 * @throws FileNotFoundException
 	 * @throws IOException
@@ -610,44 +1204,38 @@ public class Processor extends Domain implements Reporter, Registry, Constants, 
 
 	/**
 	 * @param file
-	 * @param parent
-	 * @param done
 	 * @param overwrite
 	 * @param extensionName
 	 * @throws FileNotFoundException
 	 * @throws IOException
 	 */
 	public void doIncludeFile(File file, boolean overwrite, Properties target, String extensionName) throws Exception {
-		if (included != null && included.contains(file)) {
-			error("Cyclic or multiple include of " + file);
-		} else {
-			addIncluded(file);
-			updateModified(file.lastModified(), file.toString());
-			InputStream in = new FileInputStream(file);
-			try {
-				Properties sub;
-				if (file.getName().toLowerCase().endsWith(".mf")) {
-					sub = getManifestAsProperties(in);
-				} else
-					sub = loadProperties(in, file.getAbsolutePath());
-
-				doIncludes(file.getParentFile(), sub);
-				// make sure we do not override properties
-				for (Map.Entry< ? , ? > entry : sub.entrySet()) {
-					String key = (String) entry.getKey();
-					String value = (String) entry.getValue();
-
-					if (overwrite || !target.containsKey(key)) {
-						target.setProperty(key, value);
-					} else if (extensionName != null) {
-						String extensionKey = extensionName + "." + key;
-						if (!target.containsKey(extensionKey))
-							target.setProperty(extensionKey, value);
-					}
-				}
+		if (!addIncludedIfAbsent(file)) {
+			error("Cyclic or multiple include of %s", file);
+		}
+		updateModified(file.lastModified(), file.toString());
+		Properties sub;
+		if (file.getName()
+			.toLowerCase()
+			.endsWith(".mf")) {
+			try (InputStream in = IO.stream(file)) {
+				sub = getManifestAsProperties(in);
 			}
-			finally {
-				IO.close(in);
+		} else
+			sub = loadProperties(file);
+
+		doIncludes(file.getParentFile(), sub);
+		// make sure we do not override properties
+		for (Map.Entry<?, ?> entry : sub.entrySet()) {
+			String key = (String) entry.getKey();
+			String value = (String) entry.getValue();
+
+			if (overwrite || !target.containsKey(key)) {
+				target.setProperty(key, value);
+			} else if (extensionName != null) {
+				String extensionKey = extensionName + "." + key;
+				if (!target.containsKey(extensionKey))
+					target.setProperty(extensionKey, value);
 			}
 		}
 	}
@@ -658,24 +1246,27 @@ public class Processor extends Domain implements Reporter, Registry, Constants, 
 	}
 
 	public boolean refresh() {
-		plugins = null; // We always refresh our plugins
-		
-		
+		synchronized (this) {
+			plugins = null; // We always refresh our plugins
+		}
+		if (pluginLoader != null) {
+			IO.close(pluginLoader);
+			pluginLoader = null;
+		}
+
 		if (propertiesFile == null)
 			return false;
 
 		boolean changed = updateModified(propertiesFile.lastModified(), "properties file");
-		if (included != null) {
-			for (File file : included) {
-				if (changed)
-					break;
+		for (File file : getIncluded()) {
+			if (changed)
+				break;
 
-				changed |= !file.exists() || updateModified(file.lastModified(), "include file: " + file);
-			}
+			changed |= !file.exists() || updateModified(file.lastModified(), "include file: " + file);
 		}
 
 		profile = getProperty(PROFILE); // Used in property access
-		
+
 		if (changed) {
 			forceRefresh();
 			return true;
@@ -684,11 +1275,22 @@ public class Processor extends Domain implements Reporter, Registry, Constants, 
 	}
 
 	/**
-	 * 
+	 * If strict is true, then extra verification is done.
+	 */
+	boolean isStrict() {
+		if (strict == null)
+			strict = isTrue(getProperty(STRICT)); // Used in property access
+		return strict;
+	}
+
+	/**
+	 *
 	 */
 	public void forceRefresh() {
-		included = null;
-		properties.clear();
+		included.clear();
+		Processor p = getParent();
+		properties = (p != null) ? new UTF8Properties(p.getProperties0()) : new UTF8Properties();
+
 		setProperties(propertiesFile, base);
 		propertiesChanged();
 	}
@@ -699,12 +1301,10 @@ public class Processor extends Domain implements Reporter, Registry, Constants, 
 	 * Set the properties by file. Setting the properties this way will also set
 	 * the base for this analyzer. After reading the properties, this will call
 	 * setProperties(Properties) which will handle the includes.
-	 * 
+	 *
 	 * @param propertiesFile
-	 * @throws FileNotFoundException
-	 * @throws IOException
 	 */
-	public void setProperties(File propertiesFile) throws IOException {
+	public void setProperties(File propertiesFile) {
 		propertiesFile = propertiesFile.getAbsoluteFile();
 		setProperties(propertiesFile, propertiesFile.getParentFile());
 	}
@@ -722,17 +1322,16 @@ public class Processor extends Domain implements Reporter, Registry, Constants, 
 				} else
 					this.modified = modified;
 
-				included = null;
+				included.clear();
 				Properties p = loadProperties(propertiesFile);
 				setProperties(p);
 			} else {
 				if (fileMustExist) {
-					error("No such properties file: " + propertiesFile);
+					error("No such properties file: %s", propertiesFile);
 				}
 			}
-		}
-		catch (IOException e) {
-			error("Could not load properties " + propertiesFile);
+		} catch (IOException e) {
+			error("Could not load properties %s", propertiesFile);
 		}
 	}
 
@@ -742,91 +1341,123 @@ public class Processor extends Domain implements Reporter, Registry, Constants, 
 	}
 
 	public static boolean isTrue(String value) {
+
 		if (value == null)
 			return false;
 
-		return !"false".equalsIgnoreCase(value);
+		value = value.trim();
+		if (value.isEmpty())
+			return false;
+
+		if (value.startsWith("!"))
+			if (value.equals("!"))
+				return false;
+			else
+				return !isTrue(value.substring(1));
+
+		if ("false".equalsIgnoreCase(value))
+			return false;
+
+		if ("off".equalsIgnoreCase(value))
+			return false;
+
+		if ("not".equalsIgnoreCase(value))
+			return false;
+
+		return true;
 	}
 
 	/**
 	 * Get a property without preprocessing it with a proper default
-	 * 
-	 * @param headerName
+	 *
+	 * @param key
 	 * @param deflt
-	 * @return
 	 */
 
 	public String getUnprocessedProperty(String key, String deflt) {
+		if (filter != null && filter.contains(key)) {
+			return (String) getProperties().getOrDefault(key, deflt);
+		}
 		return getProperties().getProperty(key, deflt);
 	}
 
 	/**
 	 * Get a property with preprocessing it with a proper default
-	 * 
-	 * @param headerName
+	 *
+	 * @param key
 	 * @param deflt
-	 * @return
 	 */
 	public String getProperty(String key, String deflt) {
+		return getProperty(key, deflt, ",");
+	}
 
-		String value = null;
+	public String getProperty(String key, String deflt, String separator) {
+		return getProperty(key, deflt, separator, true);
+	}
+
+	@SuppressWarnings("resource")
+	private String getProperty(String key, String deflt, String separator, boolean inherit) {
 
 		Instruction ins = new Instruction(key);
-		if (!ins.isLiteral()) {
-			// Handle a wildcard key, make sure they're sorted
-			// for consistency
-			SortedList<String> sortedList = SortedList.fromIterator(iterator());
-			StringBuilder sb = new StringBuilder();
-			String del = "";
-			for (String k : sortedList) {
-				if (ins.matches(k)) {
-					String v = getProperty(k, null);
-					if (v != null) {
-						sb.append(del);
-						del = ",";
-						sb.append(v);
-					}
-				}
-			}
-			if (sb.length() == 0)
-				return deflt;
-
-			return sb.toString();
+		if (ins.isLiteral()) {
+			return getLiteralProperty(ins.getLiteral(), deflt, this, inherit);
 		}
 
-		Processor source = this;
+		return getWildcardProperty(deflt, separator, inherit, ins);
+	}
 
+	private String getWildcardProperty(String deflt, String separator, boolean inherit, Instruction ins) {
+		// Handle a wildcard key, make sure they're sorted
+		// for consistency
+		String result = stream(inherit).filter(ins::matches)
+			.sorted()
+			.map(k -> getLiteralProperty(k, null, this, inherit))
+			.filter(v -> (v != null) && !v.isEmpty())
+			.collect(Strings.joining(separator, "", "", deflt));
+		return result;
+	}
+
+	private String getLiteralProperty(String key, String deflt, Processor source, boolean inherit) {
+		String value = null;
 		// Use the key as is first, if found ok
 
 		if (filter != null && filter.contains(key)) {
-			value = (String) getProperties().get(key);
-		} else {
-			while (source != null) {
-				value = (String) source.getProperties().get(key);
-				if (value != null)
-					break;
-
-				source = source.getParent();
-			}
-		}
-
-		// Check if we found a value, if not, try to prefix
-		// it with a profile if found and search again. profiles
-		// are a simple name that is prefixed like [profile]. This
-		// allows different variables to be used in different profiles.
-
-		if (value == null && profile != null) {
-			String pkey = "[" + profile + "]" + key;
-			if (filter != null && filter.contains(key)) {
-				value = (String) getProperties().get(pkey);
-			} else {
-				while (source != null) {
-					value = (String) source.getProperties().get(pkey);
-					if (value != null)
-						break;
-
-					source = source.getParent();
+			Object raw = getProperties().get(key);
+			if (raw != null) {
+				if (raw instanceof String) {
+					value = (String) raw;
+				} else {
+					warning("Key '%s' has a non-String value: %s:%s", key, raw == null ? ""
+						: raw.getClass()
+							.getName(),
+						raw);
 				}
+			}
+		} else {
+			for (Processor proc = source; proc != null; proc = proc.getParent()) {
+				Object raw = proc.getProperties()
+					.get(key);
+				if (raw != null) {
+					if (raw instanceof String) {
+						value = (String) raw;
+					} else {
+						warning("Key '%s' has a non-String value: %s:%s", key, raw == null ? ""
+							: raw.getClass()
+								.getName(),
+							raw);
+					}
+					source = proc;
+					break;
+				}
+
+				if (!inherit)
+					break;
+			}
+			//
+			// Check if we can find a replacement through the
+			// replacer, which takes profiles into account
+			if (value == null) {
+				value = getReplacer().getMacro(key, null);
 			}
 		}
 
@@ -840,38 +1471,34 @@ public class Processor extends Domain implements Reporter, Registry, Constants, 
 
 	/**
 	 * Helper to load a properties file from disk.
-	 * 
+	 *
 	 * @param file
-	 * @return
 	 * @throws IOException
 	 */
 	public Properties loadProperties(File file) throws IOException {
 		updateModified(file.lastModified(), "Properties file: " + file);
-		InputStream in = new FileInputStream(file);
-		try {
-			Properties p = loadProperties(in, file.getAbsolutePath());
-			return p;
-		}
-		finally {
-			in.close();
-		}
+		UTF8Properties p = loadProperties0(file);
+		return p;
 	}
 
-	Properties loadProperties(InputStream in, String name) throws IOException {
-		int n = name.lastIndexOf('/');
-		if (n > 0)
-			name = name.substring(0, n);
-		if (name.length() == 0)
-			name = ".";
-
+	/**
+	 * Load Properties from disk. The default encoding is ISO-8859-1 but
+	 * nowadays all files are encoded with UTF-8. So we try to load it first as
+	 * UTF-8 and if this fails we fail back to ISO-8859-1
+	 *
+	 * @param in The stream to load from
+	 * @param name The name of the file for doc reasons
+	 * @return a Properties
+	 * @throws IOException
+	 */
+	UTF8Properties loadProperties0(File file) throws IOException {
 		try {
-			Properties p = new Properties();
-			p.load(in);
-			return replaceAll(p, "\\$\\{\\.\\}", name);
-		}
-		catch (Exception e) {
-			error("Error during loading properties file: " + name + ", error:" + e);
-			return new Properties();
+			UTF8Properties p = new UTF8Properties();
+			p.load(file, this, Constants.OSGI_SYNTAX_HEADERS);
+			return p.replaceHere(file.getParentFile());
+		} catch (Exception e) {
+			error("Error during loading properties file: %s, error: %s", file, e);
+			return new UTF8Properties();
 		}
 	}
 
@@ -880,14 +1507,14 @@ public class Processor extends Domain implements Reporter, Registry, Constants, 
 	 * preassign variables that change. I.e. the base directory ${.} for a
 	 * loaded properties
 	 */
-
 	public static Properties replaceAll(Properties p, String pattern, String replacement) {
-		Properties result = new Properties();
-		for (Iterator<Map.Entry<Object,Object>> i = p.entrySet().iterator(); i.hasNext();) {
-			Map.Entry<Object,Object> entry = i.next();
+		UTF8Properties result = new UTF8Properties();
+		Pattern regex = Pattern.compile(pattern);
+		for (Map.Entry<Object, Object> entry : p.entrySet()) {
 			String key = (String) entry.getKey();
 			String value = (String) entry.getValue();
-			value = value.replaceAll(pattern, replacement);
+			value = regex.matcher(value)
+				.replaceAll(replacement);
 			result.put(key, value);
 		}
 		return result;
@@ -895,23 +1522,23 @@ public class Processor extends Domain implements Reporter, Registry, Constants, 
 
 	/**
 	 * Print a standard Map based OSGi header.
-	 * 
-	 * @param exports
-	 *            map { name => Map { attribute|directive => value } }
+	 *
+	 * @param exports map { name => Map { attribute|directive => value } }
 	 * @return the clauses
 	 * @throws IOException
 	 */
-	public static String printClauses(Map< ? , ? extends Map< ? , ? >> exports) throws IOException {
+	public static String printClauses(Map<?, ? extends Map<?, ?>> exports) throws IOException {
 		return printClauses(exports, false);
 	}
 
-	public static String printClauses(Map< ? , ? extends Map< ? , ? >> exports, @SuppressWarnings("unused")
-	boolean checkMultipleVersions) throws IOException {
+	public static String printClauses(Map<?, ? extends Map<?, ?>> exports,
+		@SuppressWarnings("unused") boolean checkMultipleVersions) throws IOException {
 		StringBuilder sb = new StringBuilder();
 		String del = "";
-		for (Entry< ? , ? extends Map< ? , ? >> entry : exports.entrySet()) {
-			String name = entry.getKey().toString();
-			Map< ? , ? > clause = entry.getValue();
+		for (Entry<?, ? extends Map<?, ?>> entry : exports.entrySet()) {
+			String name = entry.getKey()
+				.toString();
+			Map<?, ?> clause = entry.getValue();
 
 			// We allow names to be duplicated in the input
 			// by ending them with '~'. This is necessary to use
@@ -927,39 +1554,58 @@ public class Processor extends Domain implements Reporter, Registry, Constants, 
 		return sb.toString();
 	}
 
-	public static void printClause(Map< ? , ? > map, StringBuilder sb) throws IOException {
+	public static void printClause(Map<?, ?> map, StringBuilder sb) throws IOException {
+		if (map instanceof Attrs) {
+			Attrs attrs = (Attrs) map;
+			for (Entry<String, String> entry : attrs.entrySet()) {
+				String key = entry.getKey();
+				// Skip directives we do not recognize
+				if (skipPrint(key))
+					continue;
 
-		for (Entry< ? , ? > entry : map.entrySet()) {
-			Object key = entry.getKey();
-			// Skip directives we do not recognize
-			if (key.equals(NO_IMPORT_DIRECTIVE) || key.equals(PROVIDE_DIRECTIVE) || key.equals(SPLIT_PACKAGE_DIRECTIVE)
-					|| key.equals(FROM_DIRECTIVE))
-				continue;
+				sb.append(";");
+				attrs.append(sb, entry);
+			}
+		} else {
+			for (Entry<?, ?> entry : map.entrySet()) {
+				String key = entry.getKey()
+					.toString();
+				// Skip directives we do not recognize
+				if (skipPrint(key))
+					continue;
 
-			String value = ((String) entry.getValue()).trim();
-			sb.append(";");
-			sb.append(key);
-			sb.append("=");
+				sb.append(";");
+				sb.append(key);
+				sb.append("=");
+				String value = ((String) entry.getValue()).trim();
+				quote(sb, value);
+			}
+		}
+	}
 
-			quote(sb, value);
+	private static boolean skipPrint(String key) {
+		switch (key) {
+			case INTERNAL_SOURCE_DIRECTIVE :
+			case INTERNAL_EXPORTED_DIRECTIVE :
+			case NO_IMPORT_DIRECTIVE :
+			case PROVIDE_DIRECTIVE :
+			case SPLIT_PACKAGE_DIRECTIVE :
+			case FROM_DIRECTIVE :
+			case INTERNAL_BUNDLESYMBOLICNAME_DIRECTIVE :
+			case INTERNAL_BUNDLEVERSION_DIRECTIVE :
+				return true;
+			default :
+				return false;
 		}
 	}
 
 	/**
 	 * @param sb
 	 * @param value
-	 * @return
 	 * @throws IOException
 	 */
 	public static boolean quote(Appendable sb, String value) throws IOException {
-		boolean clean = (value.length() >= 2 && value.charAt(0) == '"' && value.charAt(value.length() - 1) == '"')
-				|| Verifier.TOKEN.matcher(value).matches();
-		if (!clean)
-			sb.append("\"");
-		sb.append(value);
-		if (!clean)
-			sb.append("\"");
-		return clean;
+		return OSGiHeader.quote(sb, value);
 	}
 
 	public Macro getReplacer() {
@@ -971,8 +1617,6 @@ public class Processor extends Domain implements Reporter, Registry, Constants, 
 	/**
 	 * This should be overridden by subclasses to add extra macro command
 	 * domains on the search list.
-	 * 
-	 * @return
 	 */
 	protected Object[] getMacroDomains() {
 		return new Object[] {};
@@ -981,8 +1625,6 @@ public class Processor extends Domain implements Reporter, Registry, Constants, 
 	/**
 	 * Return the properties but expand all macros. This always returns a new
 	 * Properties object that can be used in any way.
-	 * 
-	 * @return
 	 */
 	public Properties getFlattenedProperties() {
 		return getReplacer().getFlattenedProperties();
@@ -990,24 +1632,31 @@ public class Processor extends Domain implements Reporter, Registry, Constants, 
 	}
 
 	/**
-	 * Return all inherited property keys
-	 * 
-	 * @return
+	 * Return the properties but expand all macros. This always returns a new
+	 * Properties object that can be used in any way.
+	 */
+	public Properties getFlattenedProperties(boolean ignoreInstructions) {
+		return getReplacer().getFlattenedProperties(ignoreInstructions);
+	}
+
+	/**
+	 * Return all inherited property keys. The keys are sorted for consistent
+	 * ordering.
 	 */
 	public Set<String> getPropertyKeys(boolean inherit) {
 		Set<String> result;
 		if (parent == null || !inherit) {
-			result = Create.set();
-		} else
+			result = new TreeSet<>();
+		} else {
 			result = parent.getPropertyKeys(inherit);
-		for (Object o : properties.keySet())
+		}
+		for (Object o : getProperties0().keySet()) {
 			result.add(o.toString());
-
+		}
 		return result;
 	}
 
-	public boolean updateModified(long time, @SuppressWarnings("unused")
-	String reason) {
+	public boolean updateModified(long time, @SuppressWarnings("unused") String reason) {
 		if (time > lastModified) {
 			lastModified = time;
 			return true;
@@ -1021,33 +1670,29 @@ public class Processor extends Domain implements Reporter, Registry, Constants, 
 
 	/**
 	 * Add or override a new property.
-	 * 
+	 *
 	 * @param key
 	 * @param value
 	 */
 	public void setProperty(String key, String value) {
-		checkheader: for (int i = 0; i < headers.length; i++) {
-			if (headers[i].equalsIgnoreCase(value)) {
-				value = headers[i];
-				break checkheader;
-			}
-		}
-		getProperties().put(key, value);
+		getProperties().put(normalizeKey(key), value);
 	}
 
 	/**
 	 * Read a manifest but return a properties object.
-	 * 
+	 *
 	 * @param in
-	 * @return
 	 * @throws IOException
 	 */
 	public static Properties getManifestAsProperties(InputStream in) throws IOException {
-		Properties p = new Properties();
+		Properties p = new UTF8Properties();
 		Manifest manifest = new Manifest(in);
-		for (Iterator<Object> it = manifest.getMainAttributes().keySet().iterator(); it.hasNext();) {
+		for (Iterator<Object> it = manifest.getMainAttributes()
+			.keySet()
+			.iterator(); it.hasNext();) {
 			Attributes.Name key = (Attributes.Name) it.next();
-			String value = manifest.getMainAttributes().getValue(key);
+			String value = manifest.getMainAttributes()
+				.getValue(key);
 			p.put(key.toString(), value);
 		}
 		return p;
@@ -1062,50 +1707,18 @@ public class Processor extends Domain implements Reporter, Registry, Constants, 
 	}
 
 	static public String read(InputStream in) throws Exception {
-		InputStreamReader ir = new InputStreamReader(in, "UTF8");
-		StringBuilder sb = new StringBuilder();
-
-		try {
-			char chars[] = new char[1000];
-			int size = ir.read(chars);
-			while (size > 0) {
-				sb.append(chars, 0, size);
-				size = ir.read(chars);
-			}
-		}
-		finally {
-			ir.close();
-		}
-		return sb.toString();
+		return IO.collect(in, UTF_8);
 	}
 
 	/**
 	 * Join a list.
-	 * 
-	 * @param args
-	 * @return
 	 */
-	public static String join(Collection< ? > list, String delimeter) {
-		return join(delimeter, list);
+	public static String join(Collection<?> list) {
+		return join(list, ",");
 	}
 
-	public static String join(String delimeter, Collection< ? >... list) {
-		StringBuilder sb = new StringBuilder();
-		String del = "";
-		if (list != null) {
-			for (Collection< ? > l : list) {
-				for (Object item : l) {
-					sb.append(del);
-					sb.append(item);
-					del = delimeter;
-				}
-			}
-		}
-		return sb.toString();
-	}
-
-	public static String join(Object[] list, String delimeter) {
-		if (list == null)
+	public static String join(Collection<?> list, String delimeter) {
+		if (list == null || list.isEmpty())
 			return "";
 		StringBuilder sb = new StringBuilder();
 		String del = "";
@@ -1117,38 +1730,57 @@ public class Processor extends Domain implements Reporter, Registry, Constants, 
 		return sb.toString();
 	}
 
-	public static String join(Collection< ? >... list) {
-		return join(",", list);
+	public static String join(Collection<?>... lists) {
+		return join(",", lists);
 	}
 
-	public static <T> String join(T list[]) {
+	public static String join(String delimeter, Collection<?>... lists) {
+		if (lists == null || lists.length == 0)
+			return "";
+		StringBuilder sb = new StringBuilder();
+		String del = "";
+		for (Collection<?> list : lists) {
+			for (Object item : list) {
+				sb.append(del);
+				sb.append(item);
+				del = delimeter;
+			}
+		}
+		return sb.toString();
+	}
+
+	public static String join(Object[] list, String delimeter) {
+		if (list == null || list.length == 0)
+			return "";
+		StringBuilder sb = new StringBuilder();
+		String del = "";
+		for (Object item : list) {
+			sb.append(del);
+			sb.append(item);
+			del = delimeter;
+		}
+		return sb.toString();
+	}
+
+	public static <T> String join(T[] list) {
 		return join(list, ",");
 	}
 
-	public static void split(String s, Collection<String> set) {
-
-		String elements[] = s.trim().split(LIST_SPLITTER);
-		for (String element : elements) {
-			if (element.length() > 0)
-				set.add(element);
-		}
+	public static void split(String s, Collection<String> collection) {
+		Strings.splitAsStream(s)
+			.forEachOrdered(collection::add);
 	}
 
 	public static Collection<String> split(String s) {
-		return split(s, LIST_SPLITTER);
+		return Strings.split(s);
 	}
 
 	public static Collection<String> split(String s, String splitter) {
-		if (s != null)
-			s = s.trim();
-		if (s == null || s.trim().length() == 0)
-			return Collections.emptyList();
-
-		return Arrays.asList(s.split(splitter));
+		return Strings.split(splitter, s);
 	}
 
 	public static String merge(String... strings) {
-		ArrayList<String> result = new ArrayList<String>();
+		ArrayList<String> result = new ArrayList<>();
 		for (String s : strings) {
 			if (s != null)
 				split(s, result);
@@ -1166,18 +1798,21 @@ public class Processor extends Domain implements Reporter, Registry, Constants, 
 
 	/**
 	 * Make the file short if it is inside our base directory, otherwise long.
-	 * 
-	 * @param f
-	 * @return
+	 *
+	 * @param file
 	 */
-	public String normalize(String f) {
-		if (f.startsWith(base.getAbsolutePath() + "/"))
-			return f.substring(base.getAbsolutePath().length() + 1);
-		return f;
+	public String normalize(String file) {
+		file = IO.normalizePath(file);
+		String path = IO.absolutePath(base);
+		int len = path.length();
+		if (file.startsWith(path) && file.charAt(len) == '/') {
+			return file.substring(len + 1);
+		}
+		return file;
 	}
 
-	public String normalize(File f) {
-		return normalize(f.getAbsolutePath());
+	public String normalize(File file) {
+		return normalize(file.getAbsolutePath());
 	}
 
 	public static String removeDuplicateMarker(String key) {
@@ -1196,44 +1831,27 @@ public class Processor extends Domain implements Reporter, Registry, Constants, 
 		trace = x;
 	}
 
-	static class CL extends URLClassLoader {
+	public static class CL extends ActivelyClosingClassLoader {
 
-		CL() {
-			super(new URL[0], Processor.class.getClassLoader());
+		public CL(Processor p) {
+			super(p, p.getClass()
+				.getClassLoader());
 		}
 
-		void add(URL url) {
-			URL urls[] = getURLs();
-			for (URL u : urls) {
-				if (u.equals(url))
-					return;
-			}
-			super.addURL(url);
+		@Deprecated
+		public URL[] getURLs() {
+			return new URL[0];
 		}
 
-		@Override
-		public Class< ? > loadClass(String name) throws NoClassDefFoundError {
-			try {
-				Class< ? > c = super.loadClass(name);
-				return c;
-			}
-			catch (Throwable t) {
-				StringBuilder sb = new StringBuilder();
-				sb.append(name);
-				sb.append(" not found, parent:  ");
-				sb.append(getParent());
-				sb.append(" urls:");
-				sb.append(Arrays.toString(getURLs()));
-				sb.append(" exception:");
-				sb.append(t);
-				throw new NoClassDefFoundError(sb.toString());
-			}
-		}
 	}
 
-	private CL getLoader() {
+	protected CL getLoader() {
 		if (pluginLoader == null) {
-			pluginLoader = new CL();
+			pluginLoader = new CL(this);
+			addClose(pluginLoader);
+			if (IO.isWindows() && isInteractive()) {
+				pluginLoader.autopurge(5000);
+			}
 		}
 		return pluginLoader;
 	}
@@ -1245,8 +1863,75 @@ public class Processor extends Domain implements Reporter, Registry, Constants, 
 		return base != null && base.isDirectory() && propertiesFile != null && propertiesFile.isFile();
 	}
 
+	@Override
 	public boolean isOk() {
 		return isFailOk() || (getErrors().size() == 0);
+	}
+
+	/**
+	 * Move errors and warnings to their proper place by scanning the fixup
+	 * messages property.
+	 */
+	private void fixupMessages() {
+		if (fixupMessages)
+			return;
+		fixupMessages = true;
+		Parameters fixup = getMergedParameters(Constants.FIXUPMESSAGES);
+		if (fixup.isEmpty())
+			return;
+
+		Instructions instrs = new Instructions();
+		fixup.forEach((k, v) -> instrs.put(Instruction.legacy(k), v));
+
+		doFixup(instrs, errors, warnings, FIXUPMESSAGES_IS_ERROR);
+		doFixup(instrs, warnings, errors, FIXUPMESSAGES_IS_WARNING);
+	}
+
+	private void doFixup(Instructions instrs, List<String> messages, List<String> other, String type) {
+		for (int i = 0; i < messages.size(); i++) {
+			String message = messages.get(i);
+			Instruction matcher = instrs.finder(message);
+			if (matcher == null || matcher.isNegated())
+				continue;
+
+			Attrs attrs = instrs.get(matcher);
+
+			//
+			// Default the pattern applies to the errors and warnings
+			// but we can restrict it: e.g. restrict:=error
+			//
+
+			String restrict = attrs.get(FIXUPMESSAGES_RESTRICT_DIRECTIVE);
+			if (restrict != null && !restrict.equals(type))
+				continue;
+
+			//
+			// We can optionally replace the message with another text. E.g.
+			// replace:"hello world". This can use macro expansion, the ${@}
+			// macro is set to the old message.
+			//
+			String replace = attrs.get(FIXUPMESSAGES_REPLACE_DIRECTIVE);
+			if (replace != null) {
+				logger.debug("replacing {} with {}", message, replace);
+				setProperty("@", message);
+				message = getReplacer().process(replace);
+				messages.set(i, message);
+				unsetProperty("@");
+			}
+
+			//
+			//
+			String is = attrs.get(FIXUPMESSAGES_IS_DIRECTIVE);
+
+			if (attrs.isEmpty() || FIXUPMESSAGES_IS_IGNORE.equals(is)) {
+				messages.remove(i--);
+			} else {
+				if (is != null && !type.equals(is)) {
+					messages.remove(i--);
+					other.add(message);
+				}
+			}
+		}
 	}
 
 	public boolean check(String... pattern) throws IOException {
@@ -1257,13 +1942,15 @@ public class Processor extends Domain implements Reporter, Registry, Constants, 
 				boolean match = false;
 				Pattern pat = Pattern.compile(p);
 				for (Iterator<String> i = errors.iterator(); i.hasNext();) {
-					if (pat.matcher(i.next()).find()) {
+					if (pat.matcher(i.next())
+						.find()) {
 						i.remove();
 						match = true;
 					}
 				}
 				for (Iterator<String> i = warnings.iterator(); i.hasNext();) {
-					if (pat.matcher(i.next()).find()) {
+					if (pat.matcher(i.next())
+						.find()) {
 						i.remove();
 						match = true;
 					}
@@ -1312,9 +1999,8 @@ public class Processor extends Domain implements Reporter, Registry, Constants, 
 	 * then an error is reported during manifest calculation. This allows the
 	 * plugin to fail to load when it is not needed. We first get the plugins to
 	 * ensure it is properly initialized.
-	 * 
+	 *
 	 * @param name
-	 * @return
 	 */
 	public boolean isMissingPlugin(String name) {
 		getPlugins();
@@ -1325,47 +2011,53 @@ public class Processor extends Domain implements Reporter, Registry, Constants, 
 	 * Append two strings to for a path in a ZIP or JAR file. It is guaranteed
 	 * to return a string that does not start, nor ends with a '/', while it is
 	 * properly separated with slashes. Double slashes are properly removed.
-	 * 
+	 *
 	 * <pre>
-	 *  &quot;/&quot; + &quot;abc/def/&quot; becomes &quot;abc/def&quot;
-	 *  
-	 * &#064;param prefix
-	 * &#064;param suffix
-	 * &#064;return
+	 * &quot;/&quot; + &quot;abc/def/&quot; becomes &quot;abc/def&quot;
+	 * &#064;param prefix &#064;param suffix &#064;return
 	 */
 	public static String appendPath(String... parts) {
-		StringBuilder sb = new StringBuilder();
+		StringBuilder sb = new StringBuilder(parts.length * 16);
 		boolean lastSlash = true;
 		for (String part : parts) {
-			for (int i = 0; i < part.length(); i++) {
-				char c = part.charAt(i);
-				if (c == '/') {
-					if (!lastSlash)
-						sb.append('/');
-					lastSlash = true;
-				} else {
-					sb.append(c);
-					lastSlash = false;
-				}
+			final int partlen = part.length();
+			if (partlen == 0) {
+				continue;
 			}
-
-			if (!lastSlash && sb.length() > 0) {
+			if (!lastSlash) {
 				sb.append('/');
 				lastSlash = true;
 			}
+			for (int i = 0; i < partlen; i++) {
+				char c = part.charAt(i);
+				if (lastSlash) {
+					if (c != '/') {
+						sb.append(c);
+						lastSlash = false;
+					}
+				} else {
+					sb.append(c);
+					if (c == '/') {
+						lastSlash = true;
+					}
+				}
+			}
 		}
-		if (lastSlash && sb.length() > 0)
-			sb.deleteCharAt(sb.length() - 1);
+		if (lastSlash) {
+			int sblen = sb.length();
+			if (sblen > 0) {
+				sb.setLength(sblen - 1);
+			}
+		}
 
 		return sb.toString();
 	}
 
 	/**
 	 * Parse the a=b strings and return a map of them.
-	 * 
+	 *
 	 * @param attrs
 	 * @param clazz
-	 * @return
 	 */
 	public static Attrs doAttrbutes(Object[] attrs, Clazz clazz, Macro macro) {
 		Attrs map = new Attrs();
@@ -1375,12 +2067,12 @@ public class Processor extends Domain implements Reporter, Registry, Constants, 
 
 		for (Object a : attrs) {
 			String attr = (String) a;
-			int n = attr.indexOf("=");
+			int n = attr.indexOf('=');
 			if (n > 0) {
 				map.put(attr.substring(0, n), macro.process(attr.substring(n + 1)));
 			} else
 				throw new IllegalArgumentException(formatArrays(
-						"Invalid attribute on package-info.java in %s , %s. Must be <key>=<name> ", clazz, attr));
+					"Invalid attribute on package-info.java in %s , %s. Must be <key>=<name> ", clazz, attr));
 		}
 		return map;
 	}
@@ -1388,41 +2080,39 @@ public class Processor extends Domain implements Reporter, Registry, Constants, 
 	/**
 	 * This method is the same as String.format but it makes sure that any
 	 * arrays are transformed to strings.
-	 * 
+	 *
 	 * @param string
 	 * @param parms
-	 * @return
 	 */
 	public static String formatArrays(String string, Object... parms) {
-		Object[] parms2 = parms;
-		Object[] output = new Object[parms.length];
-		for (int i = 0; i < parms.length; i++) {
-			output[i] = makePrintable(parms[i]);
-		}
-		return String.format(string, parms2);
+		return Strings.format(string, parms);
 	}
 
 	/**
 	 * Check if the object is an array and turn it into a string if it is,
 	 * otherwise unchanged.
-	 * 
-	 * @param object
-	 *            the object to make printable
+	 *
+	 * @param object the object to make printable
 	 * @return a string if it was an array or the original object
 	 */
 	public static Object makePrintable(Object object) {
 		if (object == null)
-			return object;
+			return null;
 
-		if (object.getClass().isArray()) {
-			Object[] array = (Object[]) object;
-			Object[] output = new Object[array.length];
-			for (int i = 0; i < array.length; i++) {
-				output[i] = makePrintable(array[i]);
-			}
-			return Arrays.toString(output);
+		if (object.getClass()
+			.isArray()) {
+			return Arrays.toString(makePrintableArray(object));
 		}
 		return object;
+	}
+
+	private static Object[] makePrintableArray(Object array) {
+		final int length = Array.getLength(array);
+		Object[] output = new Object[length];
+		for (int i = 0; i < length; i++) {
+			output[i] = makePrintable(Array.get(array, i));
+		}
+		return output;
 	}
 
 	public static String append(String... strings) {
@@ -1433,9 +2123,9 @@ public class Processor extends Domain implements Reporter, Registry, Constants, 
 		return join(result);
 	}
 
-	public synchronized Class< ? > getClass(String type, File jar) throws Exception {
+	public synchronized Class<?> getClass(String type, File jar) throws Exception {
 		CL cl = getLoader();
-		cl.add(jar.toURI().toURL());
+		cl.add(jar);
 		return cl.loadClass(type);
 	}
 
@@ -1449,9 +2139,8 @@ public class Processor extends Domain implements Reporter, Registry, Constants, 
 
 		tm = tm.toUpperCase();
 		TimeUnit unit = TimeUnit.MILLISECONDS;
-		Matcher m = Pattern
-				.compile("\\s*(\\d+)\\s*(NANOSECONDS|MICROSECONDS|MILLISECONDS|SECONDS|MINUTES|HOURS|DAYS)?").matcher(
-						tm);
+		Matcher m = Pattern.compile("\\s*(\\d+)\\s*(NANOSECONDS|MICROSECONDS|MILLISECONDS|SECONDS|MINUTES|HOURS|DAYS)?")
+			.matcher(tm);
 		if (m.matches()) {
 			long duration = Long.parseLong(tm);
 			String u = m.group(2);
@@ -1474,8 +2163,7 @@ public class Processor extends Domain implements Reporter, Registry, Constants, 
 		if (args.length > 1) {
 			try {
 				numchars = Integer.parseInt(args[1]);
-			}
-			catch (NumberFormatException e) {
+			} catch (NumberFormatException e) {
 				throw new IllegalArgumentException("Invalid character count parameter in ${random} macro.");
 			}
 		}
@@ -1500,7 +2188,7 @@ public class Processor extends Domain implements Reporter, Registry, Constants, 
 
 		return new String(array);
 	}
-	
+
 	/**
 	 * <p>
 	 * Generates a Capability string, in the format specified by the OSGi
@@ -1508,90 +2196,32 @@ public class Processor extends Domain implements Reporter, Registry, Constants, 
 	 * according to OSGi RFC 188. For example on Windows7 running on an x86_64
 	 * processor it should generate the following:
 	 * </p>
-	 * 
+	 *
 	 * <pre>
-	 * osgi.native;osgi.native.osname:List&lt;String&gt;="Windows7,Windows 7,Win32";osgi.native.osversion:Version=6.1.0;osgi.native.processor:List&lt;String&gt;="x86-64,amd64,em64t,x86_64"
+	 * osgi.native;osgi.native.osname:List&lt;String&gt;="Windows7,Windows
+	 * 7,Win32";osgi.native.osversion:Version=6.1.0;osgi.native.processor:List&
+	 * lt;String&gt;="x86-64,amd64,em64t,x86_64"
 	 * </pre>
-	 * 
-	 * @param args
-	 *            Ignored; reserved for future use.
+	 *
+	 * @param args The array of properties. For example: the macro invocation of
+	 *            "${native_capability;osversion=3.2.4;osname=Linux}" results in
+	 *            an args array of
+	 *            [native_capability,&nbsp;osversion=3.2.4,&nbsp;osname=Linux]
 	 */
-	public String _native_capability(String[] args) {
-		StringBuilder builder = new StringBuilder().append("osgi.native");
-		
-		try {
-			// Operating System name and version
-			String osnames;
-			Version osversion;
-			
-			String sysPropOsName = System.getProperty("os.name");
-			String sysPropOsVersion = System.getProperty("os.version");
-			if (sysPropOsName.startsWith("Windows")) {
-				if (sysPropOsVersion.startsWith("6.2")) {
-					osversion = new Version(6,2,0);
-					osnames = "Windows8,Windows 8,Win32"; 
-				} else if (sysPropOsVersion.startsWith("6.1")) {
-					osversion = new Version(6, 1, 0);
-					osnames = "Windows7,Windows 7,Win32";
-				} else if (sysPropOsName.startsWith("6.0")) {
-					osversion = new Version(6, 0, 0);
-					osnames = "WindowsVista,WinVista,Windows Vista,Win32";
-				} else if (sysPropOsName.startsWith("5.1")) {
-					osversion = new Version(5, 1, 0);
-					osnames = "WindowsXP,WinXP,Windows XP,Win32";
-				} else {
-					throw new IllegalArgumentException(String.format("Unrecognised or unsupported Windows version while processing ${native} macro: %s version %s. Supported: XP, Vista, Win7, Win8.", sysPropOsName, sysPropOsVersion));
-				}
-			} else if (sysPropOsName.startsWith("Mac OS X")) {
-				osnames = "MacOSX,Mac OS X";
-				osversion = new Version(sysPropOsVersion);
-			} else if (sysPropOsName.toLowerCase().startsWith("linux")) {
-				osnames = "Linux";
-				osversion = new Version(sysPropOsVersion);
-			} else if (sysPropOsName.startsWith("Solaris")) {
-				osnames = "Solaris";
-				osversion = new Version(sysPropOsVersion);
-			} else if (sysPropOsName.startsWith("AIX")) {
-				osnames = "AIX";
-				osversion = new Version(sysPropOsVersion);
-			} else if (sysPropOsName.startsWith("HP-UX")) {
-				osnames = "HPUX,hp-ux";
-				osversion = new Version(sysPropOsVersion);
-			} else {
-				throw new IllegalArgumentException(String.format("Unrecognised or unsupported OS while processing ${native} macro: %s version %s. Supported: Windows, Mac OS X, Linux, Solaris, AIX, HP-UX.", sysPropOsName, sysPropOsVersion));
-			}
-			
-			builder.append(";osgi.native.osname:List<String>=\"").append(osnames).append('"');
-			builder.append(";osgi.native.osversion:Version=").append(osversion.toString());
-			
-			// Processor
-			String processorNames;
-			
-			String arch = System.getProperty("os.arch");
-			if ("x86_64".equals(arch))
-				processorNames = "x86-64,amd64,em64t,x86_64";
-			else if ("x86".equals(arch))
-				processorNames = "x86,pentium,i386,i486,i586,i686";
-			else
-				throw new IllegalArgumentException(String.format("Unrecognised/unsupported processor name '%s' in ${native} macro.", arch));
-			builder.append(";osgi.native.processor:List<String>=\"").append(processorNames).append('"');
-			
-		} catch (SecurityException e) {
-			throw new IllegalArgumentException("Security error retrieving system properties while processing ${native} macro.");
-		}
-		
-		return builder.toString();
+
+	public String _native_capability(String... args) throws Exception {
+		return OSInformation.getNativeCapabilityClause(this, args);
 	}
 
 	/**
 	 * Set the current command thread. This must be balanced with the
-	 * {@link #end(Processor)} method. The method returns the previous command
-	 * owner or null. The command owner will receive all warnings and error
-	 * reports.
+	 * {@link #endHandleErrors(Processor)} method. The method returns the
+	 * previous command owner or null. The command owner will receive all
+	 * warnings and error reports.
 	 */
 
 	protected Processor beginHandleErrors(String message) {
-		trace("begin %s", message);
+		logger.debug("begin {}", message);
 		Processor previous = current.get();
 		current.set(this);
 		return previous;
@@ -1599,11 +2229,11 @@ public class Processor extends Domain implements Reporter, Registry, Constants, 
 
 	/**
 	 * End a command. Will restore the previous command owner.
-	 * 
+	 *
 	 * @param previous
 	 */
 	protected void endHandleErrors(Processor previous) {
-		trace("end");
+		logger.debug("end");
 		current.set(previous);
 	}
 
@@ -1611,23 +2241,33 @@ public class Processor extends Domain implements Reporter, Registry, Constants, 
 		return executor;
 	}
 
+	public static ScheduledExecutorService getScheduledExecutor() {
+		return scheduledExecutor;
+	}
+
+	public static PromiseFactory getPromiseFactory() {
+		return promiseFactory;
+	}
+
 	/**
 	 * These plugins are added to the total list of plugins. The separation is
 	 * necessary because the list of plugins is refreshed now and then so we
 	 * need to be able to add them at any moment in time.
-	 * 
+	 *
 	 * @param plugin
 	 */
 	public synchronized void addBasicPlugin(Object plugin) {
 		basicPlugins.add(plugin);
-		if (plugins != null)
-			plugins.add(plugin);
+		Set<Object> p = plugins;
+		if (p != null)
+			p.add(plugin);
 	}
 
 	public synchronized void removeBasicPlugin(Object plugin) {
 		basicPlugins.remove(plugin);
-		if (plugins != null)
-			plugins.remove(plugin);
+		Set<Object> p = plugins;
+		if (p != null)
+			p.remove(plugin);
 	}
 
 	public List<File> getIncluded() {
@@ -1649,42 +2289,43 @@ public class Processor extends Domain implements Reporter, Registry, Constants, 
 
 	@Override
 	public void set(String key, String value) {
-		getProperties().setProperty(key, value);
+		setProperty(key, value);
+	}
+
+	Stream<String> stream() {
+		return stream(true);
+	}
+
+	private Stream<String> stream(boolean inherit) {
+		return StreamSupport.stream(iterable(inherit).spliterator(), false);
 	}
 
 	@Override
 	public Iterator<String> iterator() {
-		Set<String> keys = keySet();
-		final Iterator<String> it = keys.iterator();
+		return iterable(true).iterator();
+	}
 
-		return new Iterator<String>() {
-			String	current;
+	@Override
+	public Spliterator<String> spliterator() {
+		return iterable(true).spliterator();
+	}
 
-			public boolean hasNext() {
-				return it.hasNext();
-			}
+	private Iterable<String> iterable(boolean inherit) {
+		Set<Object> first = getProperties0().keySet();
+		Iterable<? extends Object> second;
+		if (parent == null || !inherit) {
+			second = Collections.emptyList();
+		} else {
+			second = parent.iterable(inherit);
+		}
 
-			public String next() {
-				return current = it.next().toString();
-			}
-
-			public void remove() {
-				getProperties().remove(current);
-			}
-		};
+		Iterable<String> iterable = Iterables.distinct(first, second, o -> (o instanceof String) ? (String) o : null,
+			Objects::nonNull);
+		return iterable;
 	}
 
 	public Set<String> keySet() {
-		Set<String> set;
-		if (parent == null)
-			set = Create.set();
-		else
-			set = parent.keySet();
-
-		for (Object o : properties.keySet())
-			set.add(o.toString());
-
-		return set;
+		return getPropertyKeys(true);
 	}
 
 	/**
@@ -1697,19 +2338,17 @@ public class Processor extends Domain implements Reporter, Registry, Constants, 
 			StringBuilder sb = new StringBuilder();
 			report(sb);
 			return sb.toString();
-		}
-		catch (Exception e) {
+		} catch (Exception e) {
 			throw new RuntimeException(e);
 		}
 	}
 
 	/**
 	 * Utiltity to replace an extension
-	 * 
+	 *
 	 * @param s
 	 * @param extension
 	 * @param newExtension
-	 * @return
 	 */
 	public String replaceExtension(String s, String extension, String newExtension) {
 		if (s.endsWith(extension))
@@ -1720,47 +2359,79 @@ public class Processor extends Domain implements Reporter, Registry, Constants, 
 
 	/**
 	 * Create a location object and add it to the locations
-	 * 
-	 * @param s
-	 * @return
 	 */
-	List<Location>	locations	= new ArrayList<Location>();
+	List<Location> locations = new ArrayList<>();
 
 	static class SetLocationImpl extends Location implements SetLocation {
 		public SetLocationImpl(String s) {
 			this.message = s;
 		}
 
+		@Override
 		public SetLocation file(String file) {
-			this.file = file;
+			this.file = (file != null) ? IO.normalizePath(file) : null;
 			return this;
 		}
 
+		@Override
 		public SetLocation header(String header) {
 			this.header = header;
 			return this;
 		}
 
+		@Override
 		public SetLocation context(String context) {
 			this.context = context;
 			return this;
 		}
 
+		@Override
 		public SetLocation method(String methodName) {
 			this.methodName = methodName;
 			return this;
 		}
 
+		@Override
 		public SetLocation line(int n) {
 			this.line = n;
 			return this;
 		}
 
+		@Override
 		public SetLocation reference(String reference) {
 			this.reference = reference;
 			return this;
 		}
 
+		@Override
+		public SetLocation details(Object details) {
+			this.details = details;
+			return this;
+		}
+
+		@Override
+		public Location location() {
+			return this;
+		}
+
+		@Override
+		public SetLocation length(int length) {
+			this.length = length;
+			return this;
+		}
+
+	}
+
+	public SetLocation setLocation(String header, String clause, SetLocation setLocation) {
+		try {
+			FileLine info = getHeader(header, clause);
+			if (info != null) {
+				info.set(setLocation);
+			}
+		} catch (Exception e) {
+			exception(e, "unexpected exception in setLocation");
+		}
+		return setLocation;
 	}
 
 	private SetLocation location(String s) {
@@ -1769,6 +2440,7 @@ public class Processor extends Domain implements Reporter, Registry, Constants, 
 		return loc;
 	}
 
+	@Override
 	public Location getLocation(String msg) {
 		for (Location l : locations)
 			if ((l.message != null) && l.message.equals(msg))
@@ -1777,4 +2449,450 @@ public class Processor extends Domain implements Reporter, Registry, Constants, 
 		return null;
 	}
 
+	/**
+	 * Get a header relative to this processor, tking its parents and includes
+	 * into account.
+	 *
+	 * @param header
+	 * @throws IOException
+	 */
+	public FileLine getHeader(String header) throws Exception {
+		return getHeader(
+			Pattern.compile("^[ \t]*" + Pattern.quote(header), Pattern.MULTILINE + Pattern.CASE_INSENSITIVE));
+	}
+
+	public static Pattern toFullHeaderPattern(String header) {
+		StringBuilder sb = new StringBuilder();
+		sb.append("^[ \t]*(")
+			.append(header)
+			.append(")(\\.[^\\s:=]*)?[ \t]*[ \t:=][ \t]*");
+		sb.append("[^\\\\\n\r]*(\\\\\n[^\\\\\n\r]*)*");
+		try {
+			return Pattern.compile(sb.toString(), Pattern.MULTILINE + Pattern.CASE_INSENSITIVE);
+		} catch (Exception e) {
+			return Pattern.compile("^[ \t]*" + Pattern.quote(header), Pattern.MULTILINE + Pattern.CASE_INSENSITIVE);
+		}
+	}
+
+	public FileLine getHeader(Pattern header) throws Exception {
+		return getHeader(header, null);
+	}
+
+	public FileLine getHeader(String header, String clause) throws Exception {
+		return getHeader(toFullHeaderPattern(header), clause == null ? null : Pattern.compile(Pattern.quote(clause)));
+	}
+
+	public FileLine getHeader(Pattern header, Pattern clause) throws Exception {
+		FileLine fl = getHeader0(header, clause);
+		if (fl != null)
+			return fl;
+
+		@SuppressWarnings("resource")
+		Processor rover = this;
+		while (rover.getPropertiesFile() == null)
+			if (rover.parent == null) {
+				return new FileLine(new File("ANONYMOUS"), 0, 0);
+			} else
+				rover = rover.parent;
+
+		return new FileLine(rover.getPropertiesFile(), 0, 0);
+	}
+
+	private FileLine getHeader0(Pattern header, Pattern clause) throws Exception {
+		FileLine fl;
+
+		File f = getPropertiesFile();
+		if (f != null) {
+			// Find in "our" local file
+			fl = findHeader(f, header, clause);
+			if (fl != null)
+				return fl;
+
+			// Get the includes (actually should parse the header
+			// to see if they override or only provide defaults?
+
+			for (Iterator<File> iter = new ArrayDeque<>(getIncluded()).descendingIterator(); iter.hasNext();) {
+				File file = iter.next();
+				fl = findHeader(file, header);
+				if (fl != null) {
+					return fl;
+				}
+			}
+		}
+		// Ok, not on this level ...
+		if (getParent() != null) {
+			fl = getParent().getHeader(header, clause);
+			if (fl != null)
+				return fl;
+		}
+
+		// Ok, report the error on the sub file
+		// Sometimes we do not have a file ...
+		if (f == null && parent != null)
+			f = parent.getPropertiesFile();
+
+		if (f == null)
+			return null;
+
+		return new FileLine(f, 0, 0);
+	}
+
+	public static FileLine findHeader(File f, String header) throws IOException {
+		return findHeader(f,
+			Pattern.compile("^[ \t]*" + Pattern.quote(header), Pattern.MULTILINE + Pattern.CASE_INSENSITIVE));
+	}
+
+	public static FileLine findHeader(File f, Pattern header) throws IOException {
+		return findHeader(f, header, null);
+	}
+
+	public static FileLine findHeader(File f, Pattern header, Pattern clause) throws IOException {
+		if (f.isFile()) {
+			String s = IO.collect(f);
+			Matcher matcher = header.matcher(s);
+			while (matcher.find()) {
+
+				FileLine fl = new FileLine();
+				fl.file = f;
+				fl.start = matcher.start();
+				fl.end = matcher.end();
+				fl.length = fl.end - fl.start;
+				fl.line = getLine(s, fl.start);
+
+				if (clause != null) {
+
+					Matcher mclause = clause.matcher(s);
+					mclause.region(fl.start, fl.end);
+
+					if (mclause.find()) {
+						fl.start = mclause.start();
+						fl.end = mclause.end();
+					} else
+						//
+						// If no clause matches, maybe
+						// we have merged headers
+						//
+						continue;
+				}
+
+				return fl;
+			}
+		}
+		return null;
+	}
+
+	public static int getLine(String s, int index) {
+		int n = 0;
+		while (--index > 0) {
+			char c = s.charAt(index);
+			if (c == '\n') {
+				n++;
+			}
+		}
+		return n;
+	}
+
+	/**
+	 * This method is about compatibility. New behavior can be conditionally
+	 * introduced by calling this method and passing what version this behavior
+	 * was introduced. This allows users of bnd to set the -upto instructions to
+	 * the version that they want to be compatible with. If this instruction is
+	 * not set, we assume the latest version.
+	 */
+
+	Version upto = null;
+
+	public boolean since(Version introduced) {
+		if (upto == null) {
+			String uptov = getProperty(UPTO);
+			if (uptov == null) {
+				upto = Version.HIGHEST;
+				return true;
+			}
+			if (!Version.VERSION.matcher(uptov)
+				.matches()) {
+				error("The %s given version is not a version: %s", UPTO, uptov);
+				upto = Version.HIGHEST;
+				return true;
+			}
+
+			upto = new Version(uptov);
+		}
+		return upto.compareTo(introduced) >= 0;
+	}
+
+	/**
+	 * Report the details of this processor. Should in general be overridden
+	 *
+	 * @param table
+	 * @throws Exception
+	 */
+
+	public void report(Map<String, Object> table) throws Exception {
+		table.put("Included Files", getIncluded());
+		table.put("Base", getBase());
+		table.put("Properties", getProperties0().entrySet());
+	}
+
+	/**
+	 * Simplified way to check booleans
+	 */
+
+	public boolean is(String propertyName) {
+		return isTrue(getProperty(propertyName));
+	}
+
+	/**
+	 * Return merged properties. The parameters provide a list of property names
+	 * which are concatenated in the output, separated by a comma. Not only are
+	 * those property names looked for, also all property names that have that
+	 * constant as a prefix, a '.', and then whatever (.*). The result is either
+	 * null if nothing was found or a list of properties
+	 */
+
+	public String mergeProperties(String key) {
+		return mergeProperties(key, ",");
+	}
+
+	public String mergeLocalProperties(String key) {
+		if (since(About._3_3)) {
+			return getProperty(makeWildcard(key), null, ",", false);
+		} else
+			return mergeProperties(key);
+	}
+
+	public String mergeProperties(String key, String separator) {
+		if (since(About._2_4))
+			return getProperty(makeWildcard(key), null, separator, true);
+		else
+			return getProperty(key);
+
+	}
+
+	private String makeWildcard(String key) {
+		return key + ".*";
+	}
+
+	/**
+	 * Get a Parameters from merged properties
+	 */
+
+	public Parameters getMergedParameters(String key) {
+		return new Parameters(mergeProperties(key), this);
+	}
+
+	/**
+	 * Add an element to an array, creating a new one if necessary
+	 */
+
+	public <T> T[] concat(Class<T> type, T[] prefix, T suffix) {
+		@SuppressWarnings("unchecked")
+		T[] result = (T[]) Array.newInstance(type, (prefix != null ? prefix.length : 0) + 1);
+		if (result.length > 1) {
+			System.arraycopy(prefix, 0, result, 0, result.length - 1);
+		}
+		result[result.length - 1] = suffix;
+		return result;
+	}
+
+	/**
+	 * Try to get a Jar from a file name/path or a url, or in last resort from
+	 * the classpath name part of their files.
+	 *
+	 * @param name URL or filename relative to the base
+	 * @param from Message identifying the caller for errors
+	 * @return null or a Jar with the contents for the name
+	 */
+	public Jar getJarFromName(String name, String from) {
+		File file = new File(name);
+		if (!file.isAbsolute())
+			file = new File(getBase(), name);
+
+		if (file.exists())
+			try {
+				Jar jar = new Jar(file);
+				addClose(jar);
+				return jar;
+			} catch (Exception e) {
+				error("Exception in parsing jar file for %s: %s %s", from, name, e);
+			}
+		// It is not a file ...
+		try {
+			// Lets try a URL
+			URL url = new URL(name);
+			try (Resource resource = Resource.fromURL(url, getPlugin(HttpClient.class))) {
+				Jar jar = Jar.fromResource(fileName(url.getPath()), resource);
+				if (jar.lastModified() <= 0L) {
+					// We assume the worst :-(
+					jar.updateModified(System.currentTimeMillis(), "use current time");
+				}
+				addClose(jar);
+				return jar;
+			}
+		} catch (IOException ee) {
+			// ignore
+		} catch (Exception ee) {
+			throw Exceptions.duck(ee);
+		}
+		return null;
+	}
+
+	private String fileName(String path) {
+		int n = path.lastIndexOf('/');
+		if (n > 0)
+			return path.substring(n + 1);
+		return path;
+	}
+
+	/**
+	 * Return the name of the properties file
+	 */
+
+	public String _thisfile(String[] args) {
+		if (propertiesFile == null) {
+			error("${thisfile} executed on a processor without a properties file");
+			return null;
+		}
+
+		return IO.absolutePath(propertiesFile);
+	}
+
+	/**
+	 * Copy the settings of another processor
+	 */
+	public void getSettings(Processor p) {
+		this.trace = p.isTrace();
+		this.pedantic = p.isPedantic();
+		this.exceptions = p.isExceptions();
+	}
+
+	static final String _frangeHelp = "${frange;<version>[;true|false]}";
+	/**
+	 * Return a range expression for a filter from a version. By default this is
+	 * based on consumer compatibility. You can specify a third argument (true)
+	 * to get provider compatibility.
+	 *
+	 * <pre>
+	 *  ${frange;1.2.3} ->
+	 * (&(version>=1.2.3)(!(version>=2.0.0)) ${frange;1.2.3, true} ->
+	 * (&(version>=1.2.3)(!(version>=1.3.0)) ${frange;[1.2.3,2.3.4)} ->
+	 * (&(version>=1.2.3)(!(version>=2.3.4))
+	 * </pre>
+	 */
+	public String _frange(String[] args) {
+		if (args.length < 2 || args.length > 3) {
+			error("Invalid filter range, 2 or 3 args" + _frangeHelp);
+			return null;
+		}
+
+		String v = args[1];
+		boolean isProvider = args.length == 3 && isTrue(args[2]);
+		VersionRange vr;
+
+		if (Verifier.isVersion(v)) {
+			Version l = new Version(v);
+			Version h = isProvider ? l.bumpMinor() : l.bumpMajor();
+			vr = new VersionRange(true, l, h, false);
+		} else if (Verifier.isVersionRange(v)) {
+			vr = new VersionRange(v);
+		} else {
+			error("The _frange parameter %s is neither a version nor a version range", v);
+			return null;
+		}
+
+		return vr.toFilter();
+	}
+
+	public String _findfile(String args[]) {
+		File f = getFile(args[1]);
+		List<String> files = new ArrayList<>();
+		tree(files, f, "", new Instruction(args[2]));
+		return join(files);
+	}
+
+	void tree(List<String> list, File current, String path, Instruction instr) {
+		if (path.length() > 0)
+			path = path + "/";
+
+		String subs[] = current.list();
+		if (subs != null) {
+			for (String sub : subs) {
+				File f = new File(current, sub);
+				if (f.isFile()) {
+					if (instr.matches(sub) ^ instr.isNegated())
+						list.add(path + sub);
+				} else
+					tree(list, f, path + sub, instr);
+			}
+		}
+	}
+
+	/**
+	 * Return an instance of an interface where each method is mapped to an
+	 * instruction available from this Processor. See {@link SyntaxAnnotation}
+	 * for how to annotate this interface.
+	 */
+	public <T> T getInstructions(Class<T> type) {
+		return Syntax.getInstructions(this, type);
+	}
+
+	/**
+	 * Return if this is an interactive environment like Eclipse or runs in
+	 * batch mode. If interactive, things can get refreshed.
+	 */
+	public boolean isInteractive() {
+		if (parent != null) {
+			return parent.isInteractive();
+		}
+		return false;
+	}
+
+	@Override
+	public Parameters getParameters(String key, boolean allowDuplicates) {
+		return new Parameters(get(key), this, allowDuplicates);
+	}
+
+	public String system(boolean allowFail, String command, String input) throws IOException, InterruptedException {
+
+		if (File.separatorChar == '\\')
+			command = "cmd /c \"" + command + "\"";
+
+		Process process = Runtime.getRuntime()
+			.exec(command, null, getBase());
+
+		if (input != null) {
+			process.getOutputStream()
+				.write(input.getBytes(UTF_8));
+		}
+		process.getOutputStream()
+			.close();
+
+		String out = IO.collect(process.getInputStream(), UTF_8);
+		String err = IO.collect(process.getErrorStream(), UTF_8);
+		int exitValue = -1;
+
+		exitValue = process.waitFor();
+
+		if (exitValue != 0) {
+			if (!allowFail) {
+				error("System command %s failed with exit code %d: %s", command, exitValue, out + "\n---\n" + err);
+			} else {
+				warning("System command %s failed with exit code %d (allowed)", command, exitValue);
+
+			}
+			return null;
+		}
+
+		return out.trim();
+	}
+
+	public String system(String command, String input) throws IOException, InterruptedException {
+		boolean allowFail = false;
+		command = command.trim();
+		if (command.startsWith("-")) {
+			command = command.substring(1);
+			allowFail = true;
+		}
+		return system(allowFail, command, null);
+	}
 }

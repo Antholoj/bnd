@@ -1,3 +1,0 @@
--resourceonly:
-Include-Resource: p;literal="hello"
--dependson: p-stale-dep

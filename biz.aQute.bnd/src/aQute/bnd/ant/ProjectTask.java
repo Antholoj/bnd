@@ -4,13 +4,12 @@ package aQute.bnd.ant;
  * The idea of this task is to read all the properties as if bnd has read them.
  * This makes it easier to use bnd standalone on the same data.
  */
+import java.io.File;
 
-import java.io.*;
+import org.apache.tools.ant.BuildException;
 
-import org.apache.tools.ant.*;
-
-import aQute.bnd.build.*;
 import aQute.bnd.build.Project;
+import aQute.bnd.build.Workspace;
 
 public class ProjectTask extends BaseTask {
 	File	basedir;
@@ -25,8 +24,7 @@ public class ProjectTask extends BaseTask {
 			Project project = Workspace.getProject(basedir);
 			project.build(underTest);
 			report(project);
-		}
-		catch (Exception e) {
+		} catch (Exception e) {
 			e.printStackTrace();
 			throw new BuildException(e);
 		}

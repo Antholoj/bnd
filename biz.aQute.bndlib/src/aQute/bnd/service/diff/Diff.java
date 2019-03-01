@@ -1,6 +1,6 @@
 package aQute.bnd.service.diff;
 
-import java.util.*;
+import java.util.Collection;
 
 public interface Diff {
 	interface Ignore {
@@ -30,7 +30,7 @@ public interface Diff {
 
 	Tree getNewer();
 
-	Collection< ? extends Diff> getChildren();
+	Collection<? extends Diff> getChildren();
 
 	Diff get(String name);
 

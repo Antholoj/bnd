@@ -1,47 +1,56 @@
 package aQute.junit;
 
-import java.io.*;
-import java.lang.reflect.*;
-import java.net.*;
-import java.util.*;
+import static java.nio.charset.StandardCharsets.UTF_8;
 
-import junit.framework.*;
+import java.io.BufferedReader;
+import java.io.InputStreamReader;
+import java.io.OutputStreamWriter;
+import java.io.PrintWriter;
+import java.net.ConnectException;
+import java.net.InetAddress;
+import java.net.Socket;
+import java.util.List;
 
-import org.osgi.framework.*;
+import org.osgi.framework.Bundle;
+
+import junit.framework.AssertionFailedError;
+import junit.framework.JUnit4TestAdapter;
+import junit.framework.Test;
+import junit.framework.TestSuite;
 
 public class JUnitEclipseReport implements TestReporter {
-	BufferedReader	in;
-	PrintWriter		out;
-	long			startTime;
-	Bundle			targetBundle;
-	List<Test>		tests;
-	boolean			verbose	= false;
-	Test			current;
+	private final BufferedReader	in;
+	private final PrintWriter		out;
+	private long					startTime;
+	private List<Test>				tests;
+	private boolean					verbose	= false;
 
 	public JUnitEclipseReport(int port) throws Exception {
 		Socket socket = null;
-		for (int i = 0; socket == null && i < 10; i++) {
+		ConnectException e = null;
+		for (int i = 0; socket == null && i < 30; i++) {
 			try {
-				socket = new Socket("127.0.0.1", port);
-			}
-			catch (ConnectException ce) {
+				socket = new Socket(InetAddress.getByName(null), port);
+			} catch (ConnectException ce) {
+				e = ce;
 				Thread.sleep(i * 100);
 			}
 		}
 		if (socket == null) {
-			System.err.println("Cannot open the JUnit Port: " + port);
-			System.exit(-2);
-			return;
+			System.err.println("Cannot open the JUnit Port: " + port + " " + e);
+			System.exit(254);
+			throw new AssertionError("unreachable");
 		}
 
-		in = new BufferedReader(new InputStreamReader(socket.getInputStream(), "UTF-8"));
-		out = new PrintWriter(new OutputStreamWriter(socket.getOutputStream(), "UTF-8"));
+		in = new BufferedReader(new InputStreamReader(socket.getInputStream(), UTF_8));
+		out = new PrintWriter(new OutputStreamWriter(socket.getOutputStream(), UTF_8));
 	}
 
+	@Override
 	public void setup(Bundle fw, Bundle targetBundle) {
-		this.targetBundle = targetBundle;
 	}
 
+	@Override
 	public void begin(List<Test> tests, int realcount) {
 		this.tests = tests;
 		message("%TESTC  ", realcount + " v2");
@@ -49,17 +58,20 @@ public class JUnitEclipseReport implements TestReporter {
 		startTime = System.currentTimeMillis();
 	}
 
+	@Override
 	public void end() {
 		message("%RUNTIME", "" + (System.currentTimeMillis() - startTime));
 		out.flush();
 		out.close();
 	}
 
+	@Override
 	public void addError(Test test, Throwable t) {
 		message("%ERROR  ", test);
 		trace(t);
 	}
 
+	@Override
 	public void addFailure(Test test, AssertionFailedError t) {
 		message("%FAILED ", test);
 		trace(t);
@@ -72,24 +84,14 @@ public class JUnitEclipseReport implements TestReporter {
 		message("%TRACEE ", "");
 	}
 
+	@Override
 	public void endTest(Test test) {
 		message("%TESTE  ", test);
 	}
 
+	@Override
 	public void startTest(Test test) {
-		this.current = test;
 		message("%TESTS  ", test);
-		try {
-			Method m = test.getClass().getMethod("setBundleContext", new Class[] {
-				BundleContext.class
-			});
-			m.invoke(test, new Object[] {
-				targetBundle.getBundleContext()
-			});
-		}
-		catch (Exception e) {
-
-		}
 	}
 
 	private void message(String key, String payload) {
@@ -112,19 +114,32 @@ public class JUnitEclipseReport implements TestReporter {
 
 	private void report(List<Test> flattened) {
 		for (int i = 0; i < flattened.size(); i++) {
-			StringBuffer sb = new StringBuffer();
+			StringBuilder sb = new StringBuilder();
 			sb.append(i + 1);
 			sb.append(",");
 			Test test = flattened.get(i);
-			sb.append(flattened.get(i));
+			if (test instanceof TestSuite || test instanceof JUnit4TestAdapter) {
+				sb.append(test);
+				sb.append(",");
+				sb.append(true);
+			} else {
+				sb.append(test);
+				sb.append(",");
+				sb.append(false);
+
+			}
 			sb.append(",");
-			sb.append(test instanceof TestSuite);
-			sb.append(",");
-			sb.append(test.countTestCases());
+			if (test instanceof JUnit4TestAdapter) {
+				sb.append(((JUnit4TestAdapter) test).getTests()
+					.size());
+			} else {
+				sb.append(test.countTestCases());
+			}
 			message("%TSTTREE", sb.toString());
 		}
 	}
 
+	@Override
 	public void aborted() {
 		end();
 	}
@@ -132,8 +147,7 @@ public class JUnitEclipseReport implements TestReporter {
 	public void close() {
 		try {
 			in.close();
-		}
-		catch (Exception ioe) {
+		} catch (Exception ioe) {
 			// ignore
 		}
 	}

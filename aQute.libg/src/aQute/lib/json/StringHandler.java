@@ -1,13 +1,13 @@
 package aQute.lib.json;
 
-import java.io.*;
-import java.lang.reflect.*;
-import java.util.*;
+import java.io.IOException;
+import java.lang.reflect.Type;
+import java.util.Map;
 
 public class StringHandler extends Handler {
 
 	@Override
-	void encode(Encoder app, Object object, Map<Object,Type> visited) throws IOException {
+	public void encode(Encoder app, Object object, Map<Object, Type> visited) throws IOException {
 		string(app, object.toString());
 	}
 
@@ -60,22 +60,22 @@ public class StringHandler extends Handler {
 	}
 
 	@Override
-	Object decode(Decoder dec, String s) throws Exception {
+	public Object decode(Decoder dec, String s) throws Exception {
 		return s;
 	}
 
 	@Override
-	Object decode(Decoder dec, Number s) {
+	public Object decode(Decoder dec, Number s) {
 		return s.toString();
 	}
 
 	@Override
-	Object decode(Decoder dec, boolean s) {
+	public Object decode(Decoder dec, boolean s) {
 		return Boolean.toString(s);
 	}
 
 	@Override
-	Object decode(Decoder dec ) {
+	public Object decode(Decoder dec) {
 		return null;
 	}
 
@@ -84,7 +84,7 @@ public class StringHandler extends Handler {
 	 * interpreted as the object but stored in its complete in the string.
 	 */
 	@Override
-	Object decodeObject(Decoder r) throws Exception {
+	public Object decodeObject(Decoder r) throws Exception {
 		return collect(r, '}');
 	}
 
@@ -93,7 +93,7 @@ public class StringHandler extends Handler {
 	 * interpreted as the array but stored in its complete in the string.
 	 */
 	@Override
-	Object decodeArray(Decoder r) throws Exception {
+	public Object decodeArray(Decoder r) throws Exception {
 		return collect(r, ']');
 	}
 
@@ -106,7 +106,6 @@ public class StringHandler extends Handler {
 	 * 
 	 * @param isr
 	 * @param c
-	 * @return
 	 * @throws Exception
 	 */
 	private Object collect(Decoder isr, @SuppressWarnings("unused") char close) throws Exception {

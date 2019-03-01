@@ -1,27 +1,76 @@
 package aQute.bnd.osgi;
 
-import java.io.*;
-import java.util.*;
-import java.util.regex.*;
-import java.util.zip.*;
+import static java.nio.charset.StandardCharsets.UTF_8;
+
+import java.io.FileNotFoundException;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.nio.ByteBuffer;
+import java.nio.file.Path;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipFile;
+
+import aQute.lib.io.IO;
+import aQute.lib.zip.ZipUtil;
 
 public class ZipResource implements Resource {
-	ZipFile		zip;
-	ZipEntry	entry;
-	long		lastModified;
-	String		extra;
+	private ByteBuffer		buffer;
+	private final ZipFile	zip;
+	private final ZipEntry	entry;
+	private final boolean	closeZipFile;
+	private long			lastModified;
+	private long			size;
+	private String			extra;
 
-	ZipResource(ZipFile zip, ZipEntry entry, long lastModified) throws UnsupportedEncodingException {
-		this.zip = zip;
-		this.entry = entry;
-		this.lastModified = lastModified;
-		byte[] data = entry.getExtra();
-		if (data != null)
-			this.extra = new String(data, "UTF-8");
+	ZipResource(Path path, String entryName) throws IOException {
+		this(new ZipFile(path.toFile()), entryName);
 	}
 
-	public InputStream openInputStream() throws IOException {
-		return zip.getInputStream(entry);
+	private ZipResource(ZipFile zip, String entryName) throws IOException {
+		this(zip, zip.getEntry(entryName), true);
+		if (entry == null) {
+			close();
+			throw new FileNotFoundException("Entry " + entryName + " not found in " + zip.getName());
+		}
+	}
+
+	ZipResource(ZipFile zip, ZipEntry entry) {
+		this(zip, entry, false);
+	}
+
+	private ZipResource(ZipFile zip, ZipEntry entry, boolean closeZipFile) {
+		this.zip = zip;
+		this.entry = entry;
+		this.closeZipFile = closeZipFile;
+		lastModified = -11L;
+		size = entry.getSize();
+		byte[] data = entry.getExtra();
+		if (data != null) {
+			extra = new String(data, UTF_8);
+		}
+	}
+
+	@Override
+	public ByteBuffer buffer() throws Exception {
+		return getBuffer().duplicate();
+	}
+
+	private ByteBuffer getBuffer() throws Exception {
+		if (buffer != null) {
+			return buffer;
+		}
+		if (size == -1) {
+			return buffer = ByteBuffer.wrap(IO.read(zip.getInputStream(entry)));
+		}
+		ByteBuffer bb = IO.copy(zip.getInputStream(entry), ByteBuffer.allocate((int) size));
+		bb.flip();
+		return buffer = bb;
+	}
+
+	@Override
+	public InputStream openInputStream() throws Exception {
+		return IO.stream(buffer());
 	}
 
 	@Override
@@ -29,56 +78,45 @@ public class ZipResource implements Resource {
 		return ":" + zip.getName() + "(" + entry.getName() + "):";
 	}
 
-	public static ZipFile build(Jar jar, File file) throws ZipException, IOException {
-		return build(jar, file, null);
-	}
-
-	public static ZipFile build(Jar jar, File file, Pattern pattern) throws ZipException, IOException {
-
-		try {
-			ZipFile zip = new ZipFile(file);
-			nextEntry: for (Enumeration< ? extends ZipEntry> e = zip.entries(); e.hasMoreElements();) {
-				ZipEntry entry = e.nextElement();
-				if (pattern != null) {
-					Matcher m = pattern.matcher(entry.getName());
-					if (!m.matches())
-						continue nextEntry;
-				}
-				if (!entry.isDirectory()) {
-					long time = entry.getTime();
-					if (time <= 0)
-						time = file.lastModified();
-					jar.putResource(entry.getName(), new ZipResource(zip, entry, time), true);
-				}
-			}
-			return zip;
-		}
-		catch (ZipException ze) {
-			throw new ZipException("The JAR/ZIP file (" + file.getAbsolutePath() + ") seems corrupted, error: "
-					+ ze.getMessage());
-		}
-		catch (FileNotFoundException e) {
-			throw new IllegalArgumentException("Problem opening JAR: " + file.getAbsolutePath());
-		}
-	}
-
+	@Override
 	public void write(OutputStream out) throws Exception {
-		FileResource.copy(this, out);
+		if (buffer != null) {
+			IO.copy(buffer(), out);
+		} else {
+			IO.copy(zip.getInputStream(entry), out);
+		}
 	}
 
+	@Override
 	public long lastModified() {
-		return lastModified;
+		if (lastModified != -11L) {
+			return lastModified;
+		}
+		return lastModified = ZipUtil.getModifiedTime(entry);
 	}
 
+	@Override
 	public String getExtra() {
 		return extra;
 	}
 
+	@Override
 	public void setExtra(String extra) {
 		this.extra = extra;
 	}
 
-	public long size() {
-		return entry.getSize();
+	@Override
+	public long size() throws Exception {
+		if (size >= 0) {
+			return size;
+		}
+		return size = getBuffer().limit();
+	}
+
+	@Override
+	public void close() throws IOException {
+		if (closeZipFile) {
+			zip.close();
+		}
 	}
 }

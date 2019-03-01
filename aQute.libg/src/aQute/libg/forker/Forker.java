@@ -1,8 +1,16 @@
 package aQute.libg.forker;
 
-import java.util.*;
-import java.util.concurrent.*;
-import java.util.concurrent.atomic.*;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Iterator;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.Executor;
+import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * A Forker is good in parallel scheduling tasks with dependencies. You can add
@@ -16,8 +24,8 @@ import java.util.concurrent.atomic.*;
  */
 public class Forker<T> {
 	final Executor		executor;
-	final Map<T,Job>	waiting		= new HashMap<T,Job>();
-	final Set<Job>		executing	= new HashSet<Job>();
+	final Map<T, Job>	waiting		= new HashMap<>();
+	final Set<Job>		executing	= new HashSet<>();
 	final AtomicBoolean	canceled	= new AtomicBoolean();
 	private int			count;
 
@@ -35,6 +43,7 @@ public class Forker<T> {
 		/**
 		 * Run when the job's dependencies are done.
 		 */
+		@Override
 		public void run() {
 			Thread.interrupted(); // clear the interrupt flag
 
@@ -47,12 +56,10 @@ public class Forker<T> {
 					t = Thread.currentThread();
 				}
 				runnable.run();
-			}
-			catch (Exception e) {
+			} catch (Exception e) {
 				exception = e;
 				e.printStackTrace();
-			}
-			finally {
+			} finally {
 				synchronized (this) {
 					t = null;
 				}
@@ -87,27 +94,25 @@ public class Forker<T> {
 	 * Constructor
 	 */
 	public Forker() {
-		this.executor = Executors.newFixedThreadPool(4);
+		this.executor = Executors.newFixedThreadPool(8);
 	}
 
 	/**
 	 * Schedule a job for execution when the dependencies are done of target are
 	 * done.
 	 * 
-	 * @param dependencies
-	 *            the dependencies that must have run
-	 * @param target
-	 *            the target, is removed from all the dependencies when it ran
-	 * @param runnable
-	 *            the runnable to run
+	 * @param dependencies the dependencies that must have run
+	 * @param target the target, is removed from all the dependencies when it
+	 *            ran
+	 * @param runnable the runnable to run
 	 */
-	public synchronized void doWhen(Collection< ? extends T> dependencies, T target, Runnable runnable) {
+	public synchronized void doWhen(Collection<? extends T> dependencies, T target, Runnable runnable) {
 		if (waiting.containsKey(target))
 			throw new IllegalArgumentException("You can only add a target once to the forker");
 
-		System.err.println("doWhen " + dependencies + " " + target);
+		System.out.println("doWhen " + dependencies + " " + target);
 		Job job = new Job();
-		job.dependencies = new HashSet<T>(dependencies);
+		job.dependencies = new HashSet<>(dependencies);
 		job.target = target;
 		job.runnable = runnable;
 		waiting.put(target, job);
@@ -116,39 +121,40 @@ public class Forker<T> {
 	public void start(long ms) throws InterruptedException {
 		check();
 		count = waiting.size();
-		System.err.println("Count " + count);
+		System.out.println("Count " + count);
 		schedule();
 		if (ms >= 0)
 			sync(ms);
 	}
 
 	private void check() {
-		Set<T> dependencies = new HashSet<T>();
+		Set<T> dependencies = new HashSet<>();
 		for (Job job : waiting.values())
 			dependencies.addAll(job.dependencies);
 		dependencies.removeAll(waiting.keySet());
 		if (dependencies.size() > 0)
 			throw new IllegalArgumentException(
-					"There are dependencies in the jobs that are not present in the targets: " + dependencies);
+				"There are dependencies in the jobs that are not present in the targets: " + dependencies);
 
 	}
 
 	public synchronized void sync(long ms) throws InterruptedException {
-		System.err.println("Waiting for sync");
+		System.out.println("Waiting for sync");
 		while (count > 0) {
-			System.err.println("Waiting for sync " + count);
+			System.out.println("Waiting for sync " + count);
 			wait(ms);
 		}
-		System.err.println("Exiting sync " + count);
+		System.out.println("Exiting sync " + count);
 	}
 
 	private void schedule() {
 		if (canceled.get())
 			return;
 
-		List<Runnable> torun = new ArrayList<Runnable>();
+		List<Runnable> torun = new ArrayList<>();
 		synchronized (this) {
-			for (Iterator<Job> e = waiting.values().iterator(); e.hasNext();) {
+			for (Iterator<Job> e = waiting.values()
+				.iterator(); e.hasNext();) {
 				Job job = e.next();
 				if (job.dependencies.isEmpty()) {
 					torun.add(job);
@@ -168,11 +174,11 @@ public class Forker<T> {
 	 */
 	void done(Job done) {
 		synchronized (this) {
-			System.err.println("count = " + count);
+			System.out.println("count = " + count);
 			executing.remove(done);
 			count--;
 			if (count == 0) {
-				System.err.println("finished");
+				System.out.println("finished");
 				notifyAll();
 				return;
 			}

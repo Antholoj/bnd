@@ -1,11 +1,9 @@
 package aQute.service.reporter;
 
-
-
 public interface Messages {
-	static public interface ERROR extends Reporter.SetLocation {}
+	interface ERROR extends Reporter.SetLocation {}
 
-	static public interface WARNING extends Reporter.SetLocation {}
+	interface WARNING extends Reporter.SetLocation {}
 
 	ERROR NoSuchFile_(Object r);
 

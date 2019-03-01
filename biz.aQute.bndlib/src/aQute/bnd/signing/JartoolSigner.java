@@ -1,14 +1,24 @@
 package aQute.bnd.signing;
 
-import java.io.*;
-import java.util.*;
+import java.io.BufferedReader;
+import java.io.File;
+import java.io.InputStream;
+import java.util.Map;
 import java.util.Map.Entry;
-import java.util.concurrent.*;
+import java.util.concurrent.TimeUnit;
 
-import aQute.bnd.osgi.*;
-import aQute.bnd.service.*;
-import aQute.libg.command.*;
-import aQute.service.reporter.*;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import aQute.bnd.osgi.Builder;
+import aQute.bnd.osgi.Constants;
+import aQute.bnd.osgi.Jar;
+import aQute.bnd.osgi.Resource;
+import aQute.bnd.service.Plugin;
+import aQute.bnd.service.SignerPlugin;
+import aQute.lib.io.IO;
+import aQute.libg.command.Command;
+import aQute.service.reporter.Reporter;
 
 /**
  * Sign the jar file. -sign : <alias> [ ';' 'password:=' <password> ] [ ';'
@@ -16,7 +26,33 @@ import aQute.service.reporter.*;
  * 
  * @author aqute
  */
+
+@aQute.bnd.annotation.plugin.BndPlugin(name = "signer", parameters = JartoolSigner.Config.class)
 public class JartoolSigner implements Plugin, SignerPlugin {
+	private final static Logger logger = LoggerFactory.getLogger(JartoolSigner.class);
+
+	@interface Config {
+		String keystore();
+
+		String storetype() default "JKS";
+
+		String path() default "jarsigner";
+
+		String storepass() default "";
+
+		String keypass() default "";
+
+		String sigFile() default "";
+
+		String digestalg() default "";
+
+		String tsa() default "";
+
+		String tsacert() default "";
+
+		String tsapolicyid() default "";
+	}
+
 	String	keystore;
 	String	storetype;
 	String	path	= "jarsigner";
@@ -24,8 +60,12 @@ public class JartoolSigner implements Plugin, SignerPlugin {
 	String	keypass;
 	String	sigFile;
 	String	digestalg;
+	String	tsa;
+	String	tsacert;
+	String	tsapolicyid;
 
-	public void setProperties(Map<String,String> map) {
+	@Override
+	public void setProperties(Map<String, String> map) {
 		if (map.containsKey("keystore"))
 			this.keystore = map.get("keystore");
 		if (map.containsKey("storetype"))
@@ -40,10 +80,18 @@ public class JartoolSigner implements Plugin, SignerPlugin {
 			this.sigFile = map.get("sigFile");
 		if (map.containsKey("digestalg"))
 			this.digestalg = map.get("digestalg");
+		if (map.containsKey("tsa"))
+			this.tsa = map.get("tsa");
+		if (map.containsKey("tsacert"))
+			this.tsacert = map.get("tsacert");
+		if (map.containsKey("tsapolicyid"))
+			this.tsapolicyid = map.get("tsapolicyid");
 	}
 
+	@Override
 	public void setReporter(Reporter processor) {}
 
+	@Override
 	public void sign(Builder builder, String alias) throws Exception {
 		File f = builder.getFile(keystore);
 		if (!f.isFile()) {
@@ -61,7 +109,7 @@ public class JartoolSigner implements Plugin, SignerPlugin {
 		command.add(path);
 		if (keystore != null) {
 			command.add("-keystore");
-			command.add(f.getAbsolutePath());
+			command.add(IO.absolutePath(f));
 		}
 
 		if (storetype != null) {
@@ -89,24 +137,39 @@ public class JartoolSigner implements Plugin, SignerPlugin {
 			command.add(digestalg);
 		}
 
-		command.add(tmp.getAbsolutePath());
+		if (tsa != null) {
+			command.add("-tsa");
+			command.add(tsa);
+		}
+
+		if (tsacert != null) {
+			command.add("-tsacert");
+			command.add(tsacert);
+		}
+
+		if (tsapolicyid != null) {
+			command.add("-tsapolicyid");
+			command.add(tsapolicyid);
+		}
+
+		command.add(IO.absolutePath(tmp));
 		command.add(alias);
-		builder.trace("Jarsigner command: %s", command);
+		logger.debug("Jarsigner command: {}", command);
 		command.setTimeout(20, TimeUnit.SECONDS);
 		StringBuilder out = new StringBuilder();
 		StringBuilder err = new StringBuilder();
 		int exitValue = command.execute(out, err);
 		if (exitValue != 0) {
-			builder.error("Signing Jar out: %s\nerr: %s", out, err);
+			builder.error("Signing Jar out: %s%nerr: %s", out, err);
 		} else {
-			builder.trace("Signing Jar out: %s \nerr: %s", out, err);
+			logger.debug("Signing Jar out: {}\nerr: {}", out, err);
 		}
 
 		Jar signed = new Jar(tmp);
 		builder.addClose(signed);
 
-		Map<String,Resource> dir = signed.getDirectories().get("META-INF");
-		for (Entry<String,Resource> entry : dir.entrySet()) {
+		Map<String, Resource> dir = signed.getDirectory("META-INF");
+		for (Entry<String, Resource> entry : dir.entrySet()) {
 			String path = entry.getKey();
 			if (path.matches(".*\\.(DSA|RSA|SF|MF)$")) {
 				jar.putResource(path, entry.getValue());
@@ -122,16 +185,14 @@ public class JartoolSigner implements Plugin, SignerPlugin {
 			@Override
 			public void run() {
 				try {
-					BufferedReader rdr = new BufferedReader(new InputStreamReader(in, Constants.DEFAULT_CHARSET));
-					String line = rdr.readLine();
-					while (line != null) {
-						sb.append(line);
-						line = rdr.readLine();
+					try (BufferedReader rdr = IO.reader(in, Constants.DEFAULT_CHARSET)) {
+						String line = rdr.readLine();
+						while (line != null) {
+							sb.append(line);
+							line = rdr.readLine();
+						}
 					}
-					rdr.close();
-					in.close();
-				}
-				catch (Exception e) {
+				} catch (Exception e) {
 					// Ignore any exceptions
 				}
 			}

@@ -1,16 +1,32 @@
 package aQute.libg.cafs;
 
-import static aQute.lib.io.IO.*;
+import static aQute.lib.io.IO.copy;
+import static java.nio.charset.StandardCharsets.UTF_8;
 
-import java.io.*;
-import java.nio.channels.*;
-import java.security.*;
-import java.util.*;
-import java.util.concurrent.atomic.*;
-import java.util.zip.*;
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.Closeable;
+import java.io.DataInput;
+import java.io.File;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.RandomAccessFile;
+import java.nio.channels.FileChannel;
+import java.nio.channels.FileLock;
+import java.security.DigestInputStream;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.util.Arrays;
+import java.util.Iterator;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.zip.CRC32;
+import java.util.zip.Deflater;
+import java.util.zip.DeflaterOutputStream;
+import java.util.zip.InflaterInputStream;
 
-import aQute.lib.index.*;
-import aQute.libg.cryptography.*;
+import aQute.lib.index.Index;
+import aQute.lib.io.IO;
+import aQute.libg.cryptography.SHA1;
 
 /**
  * CAFS implements a SHA-1 based file store. The basic idea is that every file
@@ -29,13 +45,13 @@ public class CAFS implements Closeable, Iterable<SHA1> {
 	final static String	STOREFILE		= "store.cafs";
 	final static String	ALGORITHM		= "SHA-1";
 	final static int	KEYLENGTH		= 20;
-	final static int	HEADERLENGTH	= 4 // CAFS
-												+ 4 // flags
-												+ 4 // compressed length
-												+ 4 // uncompressed length
-												+ KEYLENGTH // key
-												+ 2 // header checksum
-										;
+	final static int	HEADERLENGTH	= 4				// CAFS
+		+ 4												// flags
+		+ 4												// compressed length
+		+ 4												// uncompressed length
+		+ KEYLENGTH										// key
+		+ 2												// header checksum
+	;
 
 	final File			home;
 	Index				index;
@@ -44,8 +60,8 @@ public class CAFS implements Closeable, Iterable<SHA1> {
 
 	static {
 		try {
-		CAFS = "CAFS".getBytes("UTF-8");
-		CAFE = "CAFE".getBytes("UTF-8");
+			CAFS = "CAFS".getBytes(UTF_8);
+			CAFE = "CAFE".getBytes(UTF_8);
 		} catch (Throwable e) {
 			throw new ExceptionInInitializerError(e);
 		}
@@ -62,12 +78,7 @@ public class CAFS implements Closeable, Iterable<SHA1> {
 		this.home = home;
 		if (!home.isDirectory()) {
 			if (create) {
-				if (home.exists()) {
-					throw new IOException(home + " is not a directory");
-				}
-				if (!home.mkdirs()) {
-					throw new IOException("Could not create directory " + home);
-				}
+				IO.mkdirs(home);
 			} else
 				throw new IllegalArgumentException("CAFS requires a directory with create=false");
 		}
@@ -95,11 +106,9 @@ public class CAFS implements Closeable, Iterable<SHA1> {
 	 * Store an input stream in the CAFS while calculating and returning the
 	 * SHA-1 code.
 	 * 
-	 * @param in
-	 *            The input stream to store.
+	 * @param in The input stream to store.
 	 * @return The SHA-1 code.
-	 * @throws Exception
-	 *             if anything goes wrong
+	 * @throws Exception if anything goes wrong
 	 */
 	public SHA1 write(InputStream in) throws Exception {
 
@@ -148,8 +157,7 @@ public class CAFS implements Closeable, Iterable<SHA1> {
 				update(sha1.digest(), compressed, totalLength);
 				index.insert(sha1.digest(), insertPoint);
 				return sha1;
-			}
-			finally {
+			} finally {
 				if (lock != null)
 					lock.release();
 			}
@@ -159,8 +167,7 @@ public class CAFS implements Closeable, Iterable<SHA1> {
 	/**
 	 * Read the contents of a sha 1 key.
 	 * 
-	 * @param sha1
-	 *            The key
+	 * @param sha1 The key
 	 * @return An Input Stream on the content or null of key not found
 	 * @throws Exception
 	 */
@@ -208,8 +215,7 @@ public class CAFS implements Closeable, Iterable<SHA1> {
 				throw new IllegalArgumentException("Store file is too small, need to be at least 256 bytes: " + store);
 		}
 
-		RandomAccessFile in = new RandomAccessFile(new File(home, STOREFILE), "r");
-		try {
+		try (RandomAccessFile in = new RandomAccessFile(new File(home, STOREFILE), "r")) {
 			byte[] signature = new byte[4];
 			in.readFully(signature);
 			if (!Arrays.equals(CAFS, signature))
@@ -228,21 +234,18 @@ public class CAFS implements Closeable, Iterable<SHA1> {
 			synchronized (store) {
 				index.close();
 				File indexFile = new File(home, INDEXFILE);
-				ixf.renameTo(indexFile);
+				IO.rename(ixf, indexFile);
 				this.index = new Index(indexFile, KEYLENGTH);
 			}
 		}
-		finally {
-			in.close();
-		}
 	}
 
+	@Override
 	public void close() throws IOException {
 		synchronized (store) {
 			try {
 				store.close();
-			}
-			finally {
+			} finally {
 				index.close();
 			}
 		}
@@ -264,9 +267,9 @@ public class CAFS implements Closeable, Iterable<SHA1> {
 		byte[] buffer = new byte[compressedSize];
 		in.readFully(buffer);
 
-		InputStream xin = getSha1Stream(sha1, buffer, uncompressedSize);
-		xin.skip(uncompressedSize);
-		xin.close();
+		try (InputStream xin = getSha1Stream(sha1, buffer, uncompressedSize)) {
+			xin.skip(uncompressedSize);
+		}
 		return sha1;
 	}
 
@@ -312,13 +315,13 @@ public class CAFS implements Closeable, Iterable<SHA1> {
 					return;
 
 				if (count != total)
-					throw new IOException("Counts do not match. Expected to read: " + total + " Actually read: "
-							+ count);
+					throw new IOException(
+						"Counts do not match. Expected to read: " + total + " Actually read: " + count);
 
 				SHA1 calculatedSha1 = new SHA1(digestx.digest());
 				if (!sha1.equals(calculatedSha1))
-					throw (new IOException("SHA1 caclulated and asked mismatch, asked: " + sha1 + ", \nfound: "
-							+ calculatedSha1));
+					throw (new IOException(
+						"SHA1 caclulated and asked mismatch, asked: " + sha1 + ", \nfound: " + calculatedSha1));
 			}
 
 			@Override
@@ -334,14 +337,10 @@ public class CAFS implements Closeable, Iterable<SHA1> {
 	 * Update a record in the store, assuming the store is at the right
 	 * position.
 	 * 
-	 * @param sha1
-	 *            The checksum
-	 * @param compressed
-	 *            The compressed length
-	 * @param totalLength
-	 *            The uncompressed length
-	 * @throws IOException
-	 *             The exception
+	 * @param sha1 The checksum
+	 * @param compressed The compressed length
+	 * @param totalLength The uncompressed length
+	 * @throws IOException The exception
 	 */
 	private void update(byte[] sha1, byte[] compressed, int totalLength) throws IOException {
 		// System.err.println("pos: " + store.getFilePointer());
@@ -373,22 +372,24 @@ public class CAFS implements Closeable, Iterable<SHA1> {
 		return (short) crc.getValue();
 	}
 
+	@Override
 	public Iterator<SHA1> iterator() {
 
 		return new Iterator<SHA1>() {
-			long	position	= 0x100;
+			long position = 0x100;
 
+			@Override
 			public boolean hasNext() {
 				synchronized (store) {
 					try {
 						return position < store.length();
-					}
-					catch (IOException e) {
+					} catch (IOException e) {
 						throw new RuntimeException(e);
 					}
 				}
 			}
 
+			@Override
 			public SHA1 next() {
 				synchronized (store) {
 					try {
@@ -409,13 +410,13 @@ public class CAFS implements Closeable, Iterable<SHA1> {
 
 						position += HEADERLENGTH + compressedLength;
 						return new SHA1(sha1);
-					}
-					catch (IOException e) {
+					} catch (IOException e) {
 						throw new RuntimeException(e);
 					}
 				}
 			}
 
+			@Override
 			public void remove() {
 				throw new UnsupportedOperationException("Remvoe not supported, CAFS is write once");
 			}

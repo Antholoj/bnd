@@ -1,13 +1,18 @@
 package aQute.bnd.osgi;
 
-import java.io.*;
+import java.io.OutputStream;
 
 public class JarResource extends WriteResource {
-	Jar		jar;
-	long	size	= -1;
+	private final Jar		jar;
+	private final boolean	closeJar;
 
 	public JarResource(Jar jar) {
+		this(jar, false);
+	}
+
+	public JarResource(Jar jar, boolean closeJar) {
 		this.jar = jar;
+		this.closeJar = closeJar;
 	}
 
 	@Override
@@ -17,13 +22,7 @@ public class JarResource extends WriteResource {
 
 	@Override
 	public void write(OutputStream out) throws Exception {
-		try {
-			jar.write(out);
-		}
-		catch (Exception e) {
-			e.printStackTrace();
-			throw e;
-		}
+		jar.write(out);
 	}
 
 	public Jar getJar() {
@@ -33,6 +32,14 @@ public class JarResource extends WriteResource {
 	@Override
 	public String toString() {
 		return ":" + jar.getName() + ":";
+	}
+
+	@Override
+	public void close() {
+		if (closeJar) {
+			jar.close();
+		}
+		super.close();
 	}
 
 }

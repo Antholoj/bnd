@@ -1,10 +1,17 @@
 package aQute.lib.collections;
 
-import java.util.*;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.List;
+import java.util.regex.Pattern;
+import java.util.stream.Collector;
+
+import aQute.lib.strings.Strings;
 
 public class ExtList<T> extends ArrayList<T> {
-	private static final long	serialVersionUID	= 1L;
+	private static final long serialVersionUID = 1L;
 
+	@SafeVarargs
 	public ExtList(T... ts) {
 		super(ts.length);
 		for (T t : ts) {
@@ -12,45 +19,47 @@ public class ExtList<T> extends ArrayList<T> {
 		}
 	}
 
+	ExtList() {
+		super();
+	}
+
 	public ExtList(int size) {
 		super(size);
 	}
 
-	public ExtList(Collection<T> _) {
-		super(_);
+	public ExtList(Collection<? extends T> col) {
+		super(col);
 	}
 
-	public ExtList(Iterable<T> _) {
-		for ( T t : _)
+	public ExtList(Iterable<? extends T> col) {
+		for (T t : col)
 			add(t);
 	}
 
 	public static ExtList<String> from(String s) {
-		// TODO make sure no \ before comma
-		return from(s, "\\s*,\\s*");
+		return Strings.splitAsStream(s)
+			.collect(collector());
 	}
+
 	public static ExtList<String> from(String s, String delimeter) {
-		ExtList<String> result = new ExtList<String>();
-		String[] parts = s.split(delimeter);
-		for (String p : parts)
-			result.add(p);
-		return result;
+		return Pattern.compile(delimeter)
+			.splitAsStream(s)
+			.collect(collector());
+	}
+
+	private static Collector<String, ?, ExtList<String>> collector() {
+		return Collector.of(ExtList::new, List::add, (left, right) -> {
+			left.addAll(right);
+			return left;
+		});
 	}
 
 	public String join() {
-		return join(",");
+		return Strings.join(this);
 	}
 
 	public String join(String del) {
-		StringBuilder sb = new StringBuilder();
-		String d = "";
-		for (T t : this) {
-			sb.append(d);
-			d = del;
-			if (t != null)
-				sb.append(t.toString());
-		}
-		return sb.toString();
+		return Strings.join(del, this);
 	}
 
 }

@@ -1,11 +1,19 @@
 package aQute.bnd.filerepo;
 
-import java.io.*;
-import java.util.*;
-import java.util.regex.*;
+import java.io.File;
+import java.io.FilenameFilter;
+import java.io.IOException;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
-import aQute.bnd.version.*;
+import aQute.bnd.version.Version;
+import aQute.bnd.version.VersionRange;
+import aQute.lib.io.IO;
 
+@Deprecated
 public class FileRepo {
 	File	root;
 	Pattern	REPO_FILE	= Pattern.compile("([-a-zA-z0-9_\\.]+)-([0-9\\.]+)\\.(jar|lib)");
@@ -35,6 +43,7 @@ public class FileRepo {
 		// this list.
 		//
 		return f.listFiles(new FilenameFilter() {
+			@Override
 			public boolean accept(File dir, String name) {
 				Matcher m = REPO_FILE.matcher(name);
 				if (!m.matches())
@@ -55,6 +64,7 @@ public class FileRepo {
 
 		String list[] = root.list(new FilenameFilter() {
 
+			@Override
 			public boolean accept(File dir, String name) {
 				Matcher matcher = pattern.matcher(name);
 				return matcher.matches();
@@ -66,9 +76,10 @@ public class FileRepo {
 
 	public List<Version> versions(String bsn) throws Exception {
 		File dir = new File(root, bsn);
-		final List<Version> versions = new ArrayList<Version>();
+		final List<Version> versions = new ArrayList<>();
 		dir.list(new FilenameFilter() {
 
+			@Override
 			public boolean accept(File dir, String name) {
 				Matcher m = REPO_FILE.matcher(name);
 				if (m.matches()) {
@@ -98,11 +109,9 @@ public class FileRepo {
 
 	public File put(String bsn, Version version) throws IOException {
 		File dir = new File(root, bsn);
-		if (!dir.exists() && !dir.mkdirs()) {
-			throw new IOException("Could not create directory " + dir);
-		}
-		File file = new File(dir, bsn + "-" + version.getMajor() + "." + version.getMinor() + "." + version.getMicro()
-				+ ".jar");
+		IO.mkdirs(dir);
+		File file = new File(dir,
+			bsn + "-" + version.getMajor() + "." + version.getMinor() + "." + version.getMicro() + ".jar");
 		return file;
 	}
 

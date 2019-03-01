@@ -1,14 +1,24 @@
 package aQute.bnd.maven.support;
 
-import java.io.*;
-import java.net.*;
-import java.security.*;
-import java.util.*;
-import java.util.concurrent.*;
+import java.io.Closeable;
+import java.io.File;
+import java.io.IOException;
+import java.io.OutputStreamWriter;
+import java.net.MalformedURLException;
+import java.net.URI;
+import java.net.URL;
+import java.security.MessageDigest;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.Properties;
+import java.util.concurrent.Callable;
+import java.util.concurrent.FutureTask;
 
-import aQute.lib.hex.*;
-import aQute.lib.io.*;
-import aQute.libg.filelock.*;
+import aQute.bnd.osgi.Constants;
+import aQute.lib.hex.Hex;
+import aQute.lib.io.IO;
+import aQute.lib.utf8properties.UTF8Properties;
+import aQute.libg.filelock.DirectoryLock;
 
 /**
  * An entry (a group/artifact) in the maven cache in the .m2/repository
@@ -20,12 +30,12 @@ public class MavenEntry implements Closeable {
 	final File					dir;
 	final String				path;
 	final DirectoryLock			lock;
-	final Map<URI,CachedPom>	poms	= new HashMap<URI,CachedPom>();
+	final Map<URI, CachedPom>	poms	= new HashMap<>();
 	final File					pomFile;
 	final File					artifactFile;
 	final String				pomPath;
 	final File					propertiesFile;
-	Properties					properties;
+	UTF8Properties				properties;
 	private boolean				propertiesChanged;
 	FutureTask<File>			artifact;
 	String						artifactPath;
@@ -42,9 +52,12 @@ public class MavenEntry implements Closeable {
 		this.path = path;
 		this.pomPath = path + ".pom";
 		this.artifactPath = path + ".jar";
-		this.dir = IO.getFile(maven.repository, path).getParentFile();
-		if (!this.dir.exists() && !this.dir.mkdirs()) {
-			throw new ExceptionInInitializerError("Could not create directory " + this.dir);
+		this.dir = IO.getFile(maven.repository, path)
+			.getParentFile();
+		try {
+			IO.mkdirs(this.dir);
+		} catch (IOException e) {
+			throw new ExceptionInInitializerError(e);
 		}
 		this.pomFile = new File(maven.repository, pomPath);
 		this.artifactFile = new File(maven.repository, artifactPath);
@@ -52,14 +65,16 @@ public class MavenEntry implements Closeable {
 		this.lock = new DirectoryLock(dir, 5 * 60000); // 5 mins
 	}
 
+	public File getArtifactFile() {
+		return artifactFile;
+	}
+
 	/**
 	 * This is the method to get the POM for a cached entry.
 	 * 
-	 * @param urls
-	 *            The allowed URLs
+	 * @param urls The allowed URLs
 	 * @return a CachedPom for this maven entry
-	 * @throws Exception
-	 *             If something goes haywire
+	 * @throws Exception If something goes haywire
 	 */
 	public CachedPom getPom(URI[] urls) throws Exception {
 
@@ -100,17 +115,16 @@ public class MavenEntry implements Closeable {
 				// the file.
 
 			} else {
-				if (!dir.exists() && !dir.mkdirs()) {
-					throw new IOException("Could not create directory " + dir);
-				}
+				IO.mkdirs(dir);
 				// We really do not have the file
 				// so we have to find out who has it.
 				for (final URI url : urls) {
 
 					if (download(url, pomPath)) {
 						if (verify(url, pomPath)) {
-							artifact = new FutureTask<File>(new Callable<File>() {
+							artifact = new FutureTask<>(new Callable<File>() {
 
+								@Override
 								public File call() throws Exception {
 									if (download(url, artifactPath)) {
 										verify(url, artifactPath);
@@ -126,8 +140,7 @@ public class MavenEntry implements Closeable {
 				}
 			}
 			return null;
-		}
-		finally {
+		} finally {
 			saveProperties();
 			// lock.release();
 		}
@@ -136,11 +149,8 @@ public class MavenEntry implements Closeable {
 	/**
 	 * Download a resource from the given repo.
 	 * 
-	 * @param url
-	 *            The base url for the repo
-	 * @param path
-	 *            The path part
-	 * @return
+	 * @param url The base url for the repo
+	 * @param path The path part
 	 * @throws MalformedURLException
 	 */
 	boolean download(URI repo, String path) throws MalformedURLException {
@@ -151,8 +161,7 @@ public class MavenEntry implements Closeable {
 			IO.copy(url.openStream(), file);
 			System.err.println("Downloaded " + url);
 			return true;
-		}
-		catch (Exception e) {
+		} catch (Exception e) {
 			System.err.println("debug: " + e);
 			return false;
 		}
@@ -161,10 +170,8 @@ public class MavenEntry implements Closeable {
 	/**
 	 * Converts a repo + path to a URL..
 	 * 
-	 * @param base
-	 *            The base repo
-	 * @param path
-	 *            The path in the directory + url
+	 * @param base The base repo
+	 * @param path The path in the directory + url
 	 * @return a URL that points to the file in the repo
 	 * @throws MalformedURLException
 	 */
@@ -190,10 +197,8 @@ public class MavenEntry implements Closeable {
 	/**
 	 * We maintain a set of bnd properties in the cache directory.
 	 * 
-	 * @param key
-	 *            The key for the property
-	 * @param value
-	 *            The value for the property
+	 * @param key The key for the property
+	 * @param value The value for the property
 	 */
 	private void setProperty(String key, String value) {
 		Properties properties = getProperties();
@@ -206,19 +211,13 @@ public class MavenEntry implements Closeable {
 	 */
 	protected Properties getProperties() {
 		if (properties == null) {
-			properties = new Properties();
+			properties = new UTF8Properties();
 			File props = new File(dir, "bnd.properties");
 			if (props.exists()) {
-				FileInputStream in = null;
 				try {
-					in = new FileInputStream(props);
-					properties.load(in);
-				}
-				catch (Exception e) {
+					properties.load(props, null, Constants.OSGI_SYNTAX_HEADERS);
+				} catch (Exception e) {
 					// we ignore for now, will handle it on safe
-				}
-				finally {
-					IO.close(in);
 				}
 			}
 		}
@@ -228,8 +227,7 @@ public class MavenEntry implements Closeable {
 	/**
 	 * Answer a property.
 	 * 
-	 * @param key
-	 *            The key
+	 * @param key The key
 	 * @return The value
 	 */
 	private String getProperty(String key) {
@@ -239,14 +237,11 @@ public class MavenEntry implements Closeable {
 
 	private void saveProperties() throws IOException {
 		if (propertiesChanged) {
-			FileOutputStream fout = new FileOutputStream(propertiesFile);
-			try {
-				properties.store(fout, "");
-			}
-			finally {
+			try (OutputStreamWriter osw = new OutputStreamWriter(IO.outputStream(propertiesFile))) {
+				properties.store(osw, "");
+			} finally {
 				properties = null;
 				propertiesChanged = false;
-				fout.close();
 			}
 		}
 	}
@@ -254,8 +249,7 @@ public class MavenEntry implements Closeable {
 	/**
 	 * Help function to create the POM and record its source.
 	 * 
-	 * @param url
-	 *            the repo from which it was constructed
+	 * @param url the repo from which it was constructed
 	 * @return the new pom
 	 * @throws Exception
 	 */
@@ -271,10 +265,8 @@ public class MavenEntry implements Closeable {
 	 * Verify that the repo has a checksum file for the given path and that this
 	 * checksum matchs.
 	 * 
-	 * @param repo
-	 *            The repo
-	 * @param path
-	 *            The file id
+	 * @param repo The repo
+	 * @param path The file id
 	 * @return true if there is a digest and it matches one of the algorithms
 	 * @throws Exception
 	 */
@@ -292,7 +284,6 @@ public class MavenEntry implements Closeable {
 	 * @param repo
 	 * @param path
 	 * @param algorithm
-	 * @return
 	 * @throws Exception
 	 */
 	private boolean verify(URI repo, String path, String algorithm) throws Exception {
@@ -302,20 +293,12 @@ public class MavenEntry implements Closeable {
 		if (download(repo, digestPath)) {
 			File digestFile = new File(root, digestPath);
 			final MessageDigest md = MessageDigest.getInstance(algorithm);
-			IO.copy(actualFile, new OutputStream() {
-				@Override
-				public void write(int c) throws IOException {
-					md.update((byte) c);
-				}
-
-				@Override
-				public void write(byte[] buffer, int offset, int length) {
-					md.update(buffer, offset, length);
-				}
-			});
+			IO.copy(actualFile, md);
 			byte[] digest = md.digest();
-			String source = IO.collect(digestFile).toUpperCase();
-			String hex = Hex.toHexString(digest).toUpperCase();
+			String source = IO.collect(digestFile)
+				.toUpperCase();
+			String hex = Hex.toHexString(digest)
+				.toUpperCase();
 			if (source.startsWith(hex)) {
 				System.err.println("Verified ok " + actualFile + " digest " + algorithm);
 				return true;
@@ -335,6 +318,7 @@ public class MavenEntry implements Closeable {
 		return pomFile;
 	}
 
+	@Override
 	public void close() throws IOException {
 
 	}

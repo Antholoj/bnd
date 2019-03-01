@@ -1,13 +1,23 @@
 package aQute.bnd.osgi;
 
+import aQute.bnd.osgi.Clazz.MethodParameter;
 import aQute.bnd.osgi.Descriptors.TypeRef;
 
-@SuppressWarnings("unused")
+/**
+ * When adding methods to this class, you must also add them to
+ * {@link ClassDataCollectors}!
+ */
 public class ClassDataCollector {
+
 	public void classBegin(int access, TypeRef name) {}
 
 	public boolean classStart(int access, TypeRef className) {
 		classBegin(access, className);
+		return true;
+	}
+
+	public boolean classStart(Clazz c) {
+		classBegin(c.getAccess(), c.getClassName());
 		return true;
 	}
 
@@ -17,13 +27,13 @@ public class ClassDataCollector {
 
 	public void addReference(TypeRef ref) {}
 
-	public void annotation(Annotation annotation) {}
+	public void annotation(Annotation annotation) throws Exception {}
 
 	public void parameter(int p) {}
 
-	public void method(Clazz.MethodDef defined) {}
+	public void method(Clazz.MethodDef method) {}
 
-	public void field(Clazz.FieldDef defined) {}
+	public void field(Clazz.FieldDef field) {}
 
 	public void classEnd() throws Exception {}
 
@@ -32,14 +42,11 @@ public class ClassDataCollector {
 	/**
 	 * The EnclosingMethod attribute
 	 * 
-	 * @param cName
-	 *            The name of the enclosing class, never null. Name is with
+	 * @param cName The name of the enclosing class, never null. Name is with
 	 *            slashes.
-	 * @param mName
-	 *            The name of the enclosing method in the class with cName or
+	 * @param mName The name of the enclosing method in the class with cName or
 	 *            null
-	 * @param mDescriptor
-	 *            The descriptor of this type
+	 * @param mDescriptor The descriptor of this type
 	 */
 	public void enclosingMethod(TypeRef cName, String mName, String mDescriptor) {
 
@@ -48,18 +55,15 @@ public class ClassDataCollector {
 	/**
 	 * The InnerClass attribute
 	 * 
-	 * @param innerClass
-	 *            The name of the inner class (with slashes). Can be null.
-	 * @param outerClass
-	 *            The name of the outer class (with slashes) Can be null.
-	 * @param innerName
-	 *            The name inside the outer class, can be null.
-	 * @param modifiers
-	 *            The access flags
+	 * @param innerClass The name of the inner class (with slashes). Can be
+	 *            null.
+	 * @param outerClass The name of the outer class (with slashes) Can be null.
+	 * @param innerName The name inside the outer class, can be null.
+	 * @param innerClassAccessFlags The access flags
 	 * @throws Exception
 	 */
 	public void innerClass(TypeRef innerClass, TypeRef outerClass, String innerName, int innerClassAccessFlags)
-			throws Exception {}
+		throws Exception {}
 
 	public void signature(String signature) {}
 
@@ -80,4 +84,13 @@ public class ClassDataCollector {
 	 */
 	public void referTo(TypeRef typeRef, int modifiers) {}
 
+	public void annotationDefault(Clazz.MethodDef method) {}
+
+	public void annotationDefault(Clazz.MethodDef method, Object value) {
+		annotationDefault(method);
+	}
+
+	public void typeuse(int target_type, int target_index, byte[] target_info, byte[] type_path) {}
+
+	public void methodParameters(Clazz.MethodDef method, MethodParameter[] parameters) {}
 }

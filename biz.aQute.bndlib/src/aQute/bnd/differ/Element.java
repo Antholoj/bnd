@@ -1,8 +1,13 @@
 package aQute.bnd.differ;
 
-import java.util.*;
+import java.util.Arrays;
+import java.util.Collection;
+import java.util.Objects;
 
-import aQute.bnd.service.diff.*;
+import aQute.bnd.service.diff.Delta;
+import aQute.bnd.service.diff.Diff;
+import aQute.bnd.service.diff.Tree;
+import aQute.bnd.service.diff.Type;
 
 /**
  * An element can be compared to another element of the same type. Elements with
@@ -22,6 +27,7 @@ import aQute.bnd.service.diff.*;
 
 class Element implements Tree {
 	final static Element[]	EMPTY	= new Element[0];
+
 	final Type				type;
 	final String			name;
 	final Delta				add;
@@ -37,14 +43,14 @@ class Element implements Tree {
 		this(type, name, Arrays.asList(children), Delta.MINOR, Delta.MAJOR, null);
 	}
 
-	Element(Type type, String name, Collection< ? extends Element> children, Delta add, Delta remove, String comment) {
+	Element(Type type, String name, Collection<? extends Element> children, Delta add, Delta remove, String comment) {
 		this.type = type;
 		this.name = name;
 		this.add = add;
 		this.remove = remove;
 		this.comment = comment;
 		if (children != null && children.size() > 0) {
-			this.children = children.toArray(new Element[children.size()]);
+			this.children = children.toArray(EMPTY);
 			Arrays.sort(this.children);
 		} else
 			this.children = EMPTY;
@@ -66,6 +72,7 @@ class Element implements Tree {
 		}
 	}
 
+	@Override
 	public Data serialize() {
 		Data data = new Data();
 		data.type = this.type;
@@ -82,10 +89,12 @@ class Element implements Tree {
 		return data;
 	}
 
+	@Override
 	public Type getType() {
 		return type;
 	}
 
+	@Override
 	public String getName() {
 		return name;
 	}
@@ -94,6 +103,7 @@ class Element implements Tree {
 		return comment;
 	}
 
+	@Override
 	public int compareTo(Tree other) {
 		if (type == other.getType())
 			return name.compareTo(other.getName());
@@ -110,25 +120,30 @@ class Element implements Tree {
 
 	@Override
 	public int hashCode() {
-		return type.hashCode() ^ name.hashCode();
+		return Objects.hash(type, name);
 	}
 
+	@Override
 	public Tree[] getChildren() {
 		return children;
 	}
 
+	@Override
 	public Delta ifAdded() {
 		return add;
 	}
 
+	@Override
 	public Delta ifRemoved() {
 		return remove;
 	}
 
+	@Override
 	public Diff diff(Tree older) {
 		return new DiffImpl(this, older);
 	}
 
+	@Override
 	public Element get(String name) {
 		for (Element e : children) {
 			if (e.name.equals(name))
@@ -139,7 +154,24 @@ class Element implements Tree {
 
 	@Override
 	public String toString() {
-		return type + " " + name + " (" + add + "/" + remove + ")";
+		StringBuilder sb = new StringBuilder();
+		toString(sb, "");
+		return sb.toString();
+	}
+
+	private void toString(StringBuilder sb, String indent) {
+		sb.append(indent)
+			.append(type)
+			.append(" ")
+			.append(name)
+			.append(" (")
+			.append(add)
+			.append("/")
+			.append(remove)
+			.append(")")
+			.append("\n");
+		for (Element e : children)
+			e.toString(sb, indent + " ");
 	}
 
 }

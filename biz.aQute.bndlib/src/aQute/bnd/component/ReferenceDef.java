@@ -1,17 +1,34 @@
 package aQute.bnd.component;
 
-import org.osgi.service.component.annotations.*;
+import static aQute.bnd.component.DSAnnotationReader.V1_0;
+import static aQute.bnd.component.DSAnnotationReader.V1_2;
+import static aQute.bnd.component.DSAnnotationReader.V1_3;
 
-import aQute.bnd.osgi.*;
-import aQute.bnd.version.*;
-import aQute.lib.tag.*;
+import aQute.bnd.component.annotations.CollectionType;
+import aQute.bnd.component.annotations.FieldOption;
+import aQute.bnd.component.annotations.ReferenceCardinality;
+import aQute.bnd.component.annotations.ReferencePolicy;
+import aQute.bnd.component.annotations.ReferencePolicyOption;
+import aQute.bnd.component.annotations.ReferenceScope;
+import aQute.bnd.osgi.Analyzer;
+import aQute.bnd.osgi.Descriptors.TypeRef;
+import aQute.bnd.osgi.Verifier;
+import aQute.bnd.version.Version;
+import aQute.bnd.xmlattribute.ExtensionDef;
+import aQute.bnd.xmlattribute.Namespaces;
+import aQute.bnd.xmlattribute.XMLAttributeFinder;
+import aQute.lib.tag.Tag;
 
 /**
  * Holds the information in the reference element.
  */
 
-class ReferenceDef {
-	Version					version	= AnnotationReader.V1_0;
+class ReferenceDef extends ExtensionDef {
+
+	String					className;
+	String					bindDescriptor;
+
+	Version					version	= V1_0;
 	String					name;
 	String					service;
 	ReferenceCardinality	cardinality;
@@ -21,74 +38,99 @@ class ReferenceDef {
 	String					bind;
 	String					unbind;
 	String					updated;
+	ReferenceScope			scope;
+	String					field;
+	FieldOption				fieldOption;
+	CollectionType			collectionType;
+	boolean					isCollection;
+	boolean					isCollectionSubClass;
+	Integer					parameter;
+
+	public ReferenceDef(XMLAttributeFinder finder) {
+		super(finder);
+	}
 
 	/**
 	 * Prepare the reference, will check for any errors.
 	 * 
-	 * @param analyzer
-	 *            the analyzer to report errors to.
+	 * @param analyzer the analyzer to report errors to.
 	 * @throws Exception
 	 */
 	public void prepare(Analyzer analyzer) throws Exception {
-		if (name == null)
+		if (name == null) {
 			analyzer.error("No name for a reference");
+		}
 
-		if ((updated != null && !updated.equals("-")) || policyOption != null)
-			updateVersion(AnnotationReader.V1_2);
+		if ((updated != null && !updated.equals("-")) || policyOption != null) {
+			updateVersion(V1_2);
+		}
 
 		if (target != null) {
 			String error = Verifier.validateFilter(target);
-			if (error != null)
+			if (error != null) {
 				analyzer.error("Invalid target filter %s for %s", target, name);
+			}
 		}
 
-		if (service == null)
+		if (service == null) {
 			analyzer.error("No interface specified on %s", name);
+		} else {
+			TypeRef ref = analyzer.getTypeRefFromFQN(service);
+			analyzer.nonClassReferTo(ref);
+		}
+
+		if (scope != null || field != null) {
+			updateVersion(V1_3);
+		}
 
 	}
 
 	/**
 	 * Calculate the tag.
 	 * 
+	 * @param namespaces
 	 * @return a tag for the reference element.
 	 */
-	public Tag getTag() {
-		Tag ref = new Tag("reference");
-		ref.addAttribute("name", name);
-		if (cardinality != null)
-			ref.addAttribute("cardinality", cardinality.toString());
+	Tag getTag(Namespaces namespaces) {
+		Tag tag = new Tag("reference");
 
-		if (policy != null)
-			ref.addAttribute("policy", policy.toString());
+		tag.addAttribute("name", name)
+			.addAttribute("cardinality", cardinality)
+			.addAttribute("policy", policy)
+			.addAttribute("interface", service)
+			.addAttribute("target", target);
 
-		ref.addAttribute("interface", service);
+		if (!"-".equals(bind)) {
+			tag.addAttribute("bind", bind);
+		}
 
-		if (target != null)
-			ref.addAttribute("target", target);
+		if (!"-".equals(unbind)) {
+			tag.addAttribute("unbind", unbind);
+		}
 
-		if (bind != null && !"-".equals(bind))
-			ref.addAttribute("bind", bind);
+		if (!"-".equals(updated)) {
+			tag.addAttribute("updated", updated);
+		}
 
-		if (unbind != null && !"-".equals(unbind))
-			ref.addAttribute("unbind", unbind);
+		tag.addAttribute("policy-option", policyOption)
+			.addAttribute("scope", scope)
+			.addAttribute("field", field)
+			.addAttribute("field-option", fieldOption)
+			.addAttribute("field-collection-type", collectionType)
+			.addAttribute("parameter", parameter);
 
-		if (updated != null && !"-".equals(updated))
-			ref.addAttribute("updated", updated);
+		addAttributes(tag, namespaces);
 
-		if (policyOption != null)
-			ref.addAttribute("policy-option", policyOption.toString());
-
-		return ref;
+		return tag;
 	}
 
 	@Override
 	public String toString() {
 		return name;
 	}
-	
+
 	void updateVersion(Version version) {
 		this.version = ComponentDef.max(this.version, version);
 	}
-
 
 }

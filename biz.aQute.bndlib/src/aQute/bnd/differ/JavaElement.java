@@ -1,27 +1,61 @@
 package aQute.bnd.differ;
 
-import static aQute.bnd.service.diff.Delta.*;
-import static aQute.bnd.service.diff.Type.*;
-import static java.lang.reflect.Modifier.*;
+import static aQute.bnd.service.diff.Delta.CHANGED;
+import static aQute.bnd.service.diff.Delta.IGNORED;
+import static aQute.bnd.service.diff.Delta.MAJOR;
+import static aQute.bnd.service.diff.Delta.MICRO;
+import static aQute.bnd.service.diff.Delta.MINOR;
+import static aQute.bnd.service.diff.Type.ACCESS;
+import static aQute.bnd.service.diff.Type.ANNOTATED;
+import static aQute.bnd.service.diff.Type.ANNOTATION;
+import static aQute.bnd.service.diff.Type.API;
+import static aQute.bnd.service.diff.Type.CLASS;
+import static aQute.bnd.service.diff.Type.CLASS_VERSION;
+import static aQute.bnd.service.diff.Type.CONSTANT;
+import static aQute.bnd.service.diff.Type.DEFAULT;
+import static aQute.bnd.service.diff.Type.ENUM;
+import static aQute.bnd.service.diff.Type.EXTENDS;
+import static aQute.bnd.service.diff.Type.FIELD;
+import static aQute.bnd.service.diff.Type.IMPLEMENTS;
+import static aQute.bnd.service.diff.Type.INTERFACE;
+import static aQute.bnd.service.diff.Type.METHOD;
+import static aQute.bnd.service.diff.Type.PACKAGE;
+import static aQute.bnd.service.diff.Type.PROPERTY;
+import static aQute.bnd.service.diff.Type.RETURN;
+import static aQute.bnd.service.diff.Type.VERSION;
 
-import java.lang.reflect.*;
-import java.util.*;
+import java.lang.reflect.Array;
+import java.lang.reflect.Modifier;
+import java.util.Arrays;
+import java.util.Collection;
+import java.util.EnumSet;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
 import java.util.Map.Entry;
-import java.util.concurrent.atomic.*;
-import java.util.jar.*;
+import java.util.Set;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.jar.Manifest;
 
-import aQute.bnd.annotation.*;
-import aQute.bnd.header.*;
-import aQute.bnd.osgi.*;
+import aQute.bnd.header.Attrs;
+import aQute.bnd.header.OSGiHeader;
+import aQute.bnd.osgi.Analyzer;
+import aQute.bnd.osgi.Annotation;
+import aQute.bnd.osgi.ClassDataCollector;
+import aQute.bnd.osgi.Clazz;
 import aQute.bnd.osgi.Clazz.JAVA;
 import aQute.bnd.osgi.Clazz.MethodDef;
+import aQute.bnd.osgi.Constants;
 import aQute.bnd.osgi.Descriptors.PackageRef;
 import aQute.bnd.osgi.Descriptors.TypeRef;
-import aQute.bnd.service.diff.*;
+import aQute.bnd.osgi.Instructions;
+import aQute.bnd.osgi.Packages;
+import aQute.bnd.service.diff.Delta;
 import aQute.bnd.service.diff.Type;
 import aQute.bnd.version.Version;
-import aQute.lib.collections.*;
-import aQute.libg.generics.*;
+import aQute.lib.collections.MultiMap;
+import aQute.libg.generics.Create;
 
 /**
  * An element that compares the access field in a binary compatible way. This
@@ -50,24 +84,33 @@ import aQute.libg.generics.*;
  */
 
 class JavaElement {
-	final static EnumSet<Type>			INHERITED		= EnumSet.of(FIELD, METHOD, EXTENDS, IMPLEMENTS);
-	private static final Element		PROTECTED		= new Element(ACCESS, "protected", null, MAJOR, MINOR, null);
-	private static final Element		STATIC			= new Element(ACCESS, "static", null, MAJOR, MAJOR, null);
-	private static final Element		ABSTRACT		= new Element(ACCESS, "abstract", null, MAJOR, MINOR, null);
-	private static final Element		FINAL			= new Element(ACCESS, "final", null, MAJOR, MINOR, null);
-	// private static final Element DEPRECATED = new Element(ACCESS,
-	// "deprecated", null,
-	// CHANGED, CHANGED, null);
+	final static EnumSet<Type>			INHERITED			= EnumSet.of(FIELD, METHOD, EXTENDS, IMPLEMENTS);
+	private static final Element		PROTECTED			= new Element(ACCESS, "protected", null, MAJOR, MINOR,
+		null);
+	private static final Element		PROTECTED_PROVIDER	= new Element(ACCESS, "protected", null, MINOR, MINOR,
+		null);
+	private static final Element		STATIC				= new Element(ACCESS, "static", null, MAJOR, MAJOR, null);
+	private static final Element		ABSTRACT			= new Element(ACCESS, "abstract", null, MAJOR, MINOR, null);
+	private static final Element		FINAL				= new Element(ACCESS, "final", null, MAJOR, MINOR, null);
+	// Common return type elements
+	static final Element				VOID_R				= new Element(RETURN, "void");
+	static final Element				BOOLEAN_R			= new Element(RETURN, "boolean");
+	static final Element				BYTE_R				= new Element(RETURN, "byte");
+	static final Element				SHORT_R				= new Element(RETURN, "short");
+	static final Element				CHAR_R				= new Element(RETURN, "char");
+	static final Element				INT_R				= new Element(RETURN, "int");
+	static final Element				LONG_R				= new Element(RETURN, "long");
+	static final Element				FLOAT_R				= new Element(RETURN, "float");
+	static final Element				DOUBLE_R			= new Element(RETURN, "double");
+	static final Element				OBJECT_R			= new Element(RETURN, "java.lang.Object");
 
 	final Analyzer						analyzer;
-	final Map<PackageRef,Instructions>	providerMatcher	= Create.map();
-	final Set<TypeRef>					notAccessible	= Create.set();
-	final Map<Object,Element>			cache			= Create.map();
-	MultiMap<PackageRef, //
-	Element>							packages;
-	final MultiMap<TypeRef, //
-	Element>							covariant		= new MultiMap<TypeRef,Element>();
-	final Set<JAVA>						javas			= Create.set();
+	final Map<PackageRef, Instructions>	providerMatcher		= Create.map();
+	final Map<TypeRef, Integer>			innerAccess			= new HashMap<>();
+	final Set<TypeRef>					notAccessible		= Create.set();
+	final Map<Object, Element>			cache				= Create.map();
+	final MultiMap<PackageRef, Element>	packages;
+	final Set<JAVA>						javas				= Create.set();
 	final Packages						exports;
 
 	/**
@@ -80,11 +123,14 @@ class JavaElement {
 	JavaElement(Analyzer analyzer) throws Exception {
 		this.analyzer = analyzer;
 
-		Manifest manifest = analyzer.getJar().getManifest();
-		if (manifest != null && manifest.getMainAttributes().getValue(Constants.BUNDLE_MANIFESTVERSION) != null) {
+		Manifest manifest = analyzer.getJar()
+			.getManifest();
+		if (manifest != null && manifest.getMainAttributes()
+			.getValue(Constants.BUNDLE_MANIFESTVERSION) != null) {
 			exports = new Packages();
-			for (Map.Entry<String,Attrs> entry : OSGiHeader.parseHeader(
-					manifest.getMainAttributes().getValue(Constants.EXPORT_PACKAGE)).entrySet())
+			for (Map.Entry<String, Attrs> entry : OSGiHeader.parseHeader(manifest.getMainAttributes()
+				.getValue(Constants.EXPORT_PACKAGE))
+				.entrySet())
 				exports.put(analyzer.getPackageRef(entry.getKey()), entry.getValue());
 		} else
 			exports = analyzer.getContained();
@@ -94,8 +140,9 @@ class JavaElement {
 		// out who the providers and consumers are
 		//
 
-		for (Entry<PackageRef,Attrs> entry : exports.entrySet()) {
-			String value = entry.getValue().get(Constants.PROVIDER_TYPE_DIRECTIVE);
+		for (Entry<PackageRef, Attrs> entry : exports.entrySet()) {
+			String value = entry.getValue()
+				.get(Constants.PROVIDER_TYPE_DIRECTIVE);
 			if (value != null) {
 				providerMatcher.put(entry.getKey(), new Instructions(value));
 			}
@@ -105,11 +152,17 @@ class JavaElement {
 		// creating the packages yet because we do not yet know
 		// which classes are accessible
 
-		packages = new MultiMap<PackageRef,Element>();
+		packages = new MultiMap<>();
 
-		for (Clazz c : analyzer.getClassspace().values()) {
+		for (Clazz c : analyzer.getClassspace()
+			.values()) {
+
+			if (c.isSynthetic())
+				continue;
+
 			if (c.isPublic() || c.isProtected()) {
-				PackageRef packageName = c.getClassName().getPackageRef();
+				PackageRef packageName = c.getClassName()
+					.getPackageRef();
 
 				if (exports.containsKey(packageName)) {
 					Element cdef = classElement(c);
@@ -127,30 +180,27 @@ class JavaElement {
 	}
 
 	private Element getLocalAPI() throws Exception {
-		List<Element> result = new ArrayList<Element>();
+		Set<Element> result = new HashSet<>();
 
-		for (Map.Entry<PackageRef,List<Element>> entry : packages.entrySet()) {
+		for (Map.Entry<PackageRef, List<Element>> entry : packages.entrySet()) {
 			List<Element> set = entry.getValue();
-			for (Iterator<Element> i = set.iterator(); i.hasNext();) {
-
-				if (notAccessible.contains(analyzer.getTypeRefFromFQN(i.next().getName())))
-					i.remove();
-
-			}
-			String version = exports.get(entry.getKey()).get(Constants.VERSION_ATTRIBUTE);
+			set.removeIf(element -> notAccessible.contains(analyzer.getTypeRefFromFQN(element.getName())));
+			String version = exports.get(entry.getKey())
+				.get(Constants.VERSION_ATTRIBUTE);
 			if (version != null) {
 				Version v = new Version(version);
-				set.add(new Element(Type.VERSION, v.getWithoutQualifier().toString(), null, IGNORED, IGNORED, null));
+				set.add(new Element(VERSION, v.toStringWithoutQualifier(), null, IGNORED, IGNORED, null));
 			}
-			Element pd = new Element(Type.PACKAGE, entry.getKey().getFQN(), set, MINOR, MAJOR, null);
+			Element pd = new Element(PACKAGE, entry.getKey()
+				.getFQN(), set, MINOR, MAJOR, null);
 			result.add(pd);
 		}
 
 		for (JAVA java : javas) {
-			result.add(new Element(CLASS_VERSION, java.toString(), null, Delta.CHANGED, Delta.CHANGED, null));
+			result.add(new Element(CLASS_VERSION, java.toString(), null, CHANGED, CHANGED, null));
 		}
 
-		return new Element(Type.API, "<api>", result, CHANGED, CHANGED, null);
+		return new Element(API, "<api>", result, CHANGED, CHANGED, null);
 	}
 
 	/**
@@ -162,7 +212,6 @@ class JavaElement {
 	 * @param analyzer
 	 * @param clazz
 	 * @param infos
-	 * @return
 	 * @throws Exception
 	 */
 	Element classElement(final Clazz clazz) throws Exception {
@@ -170,11 +219,10 @@ class JavaElement {
 		if (e != null)
 			return e;
 
-		final StringBuilder comment = new StringBuilder();
-		final Set<Element> members = new HashSet<Element>();
+		final Set<Element> members = Create.set();
 		final Set<MethodDef> methods = Create.set();
 		final Set<Clazz.FieldDef> fields = Create.set();
-		final MultiMap<Clazz.Def,Element> annotations = new MultiMap<Clazz.Def,Element>();
+		final MultiMap<Clazz.Def, Element> annotations = new MultiMap<>();
 
 		final TypeRef name = clazz.getClassName();
 
@@ -216,28 +264,12 @@ class JavaElement {
 			}
 
 			@Override
-			public void deprecated() {
-				if (memberEnd)
-					clazz.setDeprecated(true);
-				else if (last != null)
-					last.setDeprecated(true);
-			}
-
-			@Override
 			public void field(Clazz.FieldDef defined) {
 				if (defined.isProtected() || defined.isPublic()) {
 					last = defined;
 					fields.add(defined);
 				} else
 					last = null;
-			}
-
-			@Override
-			public void constant(Object o) {
-				if (last != null) {
-					// Must be accessible now
-					last.setConstant(o);
-				}
 			}
 
 			@Override
@@ -248,45 +280,47 @@ class JavaElement {
 
 				Clazz c = analyzer.findClass(name);
 				if ((c == null || c.isPublic()) && !name.isObject())
-					members.add(new Element(Type.EXTENDS, name.getFQN(), null, MICRO, MAJOR, comment));
+					members.add(new Element(EXTENDS, name.getFQN(), null, MICRO, MAJOR, comment));
 			}
 
 			@Override
 			public void implementsInterfaces(TypeRef names[]) throws Exception {
-				// TODO is interface reordering important for binary
-				// compatibility??
-
+				Arrays.sort(names); // ignore type reordering
 				for (TypeRef name : names) {
 
 					String comment = null;
 					if (clazz.isInterface() || clazz.isAbstract())
 						comment = inherit(members, name);
-					members.add(new Element(Type.IMPLEMENTS, name.getFQN(), null, MINOR, MAJOR, comment));
+					members.add(new Element(IMPLEMENTS, name.getFQN(), null, MINOR, MAJOR, comment));
 				}
 			}
 
 			/**
-			 * @param members
-			 * @param name
-			 * @param comment
-			 * @return
 			 */
-			Set<Element>	OBJECT	= Create.set();
+			Set<Element> OBJECT = Create.set();
 
 			public String inherit(final Set<Element> members, TypeRef name) throws Exception {
 				if (name.isObject()) {
 					if (OBJECT.isEmpty()) {
 						Clazz c = analyzer.findClass(name);
+						if (c == null) {
+							// Bnd fails on Java 9 class files #1598
+							// Caused by Java 9 not making class rsources
+							// available
+							return null;
+						}
 						Element s = classElement(c);
 						for (Element child : s.children) {
 							if (INHERITED.contains(child.type)) {
 								String n = child.getName();
 								if (child.type == METHOD) {
 									if (n.startsWith("<init>") || "getClass()".equals(child.getName())
-											|| n.startsWith("wait(") || n.startsWith("notify(")
-											|| n.startsWith("notifyAll("))
+										|| n.startsWith("wait(") || n.startsWith("notify(")
+										|| n.startsWith("notifyAll("))
 										continue;
 								}
+								if (isStatic(child))
+									continue;
 								OBJECT.add(child);
 							}
 						}
@@ -296,10 +330,14 @@ class JavaElement {
 
 					Clazz c = analyzer.findClass(name);
 					if (c == null) {
-						return "Cannot load " + name;
+						return inherit(members, analyzer.getTypeRef("java/lang/Object"));
 					}
 					Element s = classElement(c);
 					for (Element child : s.children) {
+
+						if (isStatic(child))
+							continue;
+
 						if (INHERITED.contains(child.type) && !child.name.startsWith("<")) {
 							members.add(child);
 						}
@@ -308,57 +346,104 @@ class JavaElement {
 				return null;
 			}
 
+			private boolean isStatic(Element child) {
+				boolean isStatic = child.get("static") != null;
+				return isStatic;
+			}
+
+			/**
+			 * Deprecated annotations and Provider/Consumer Type (both bnd and
+			 * OSGi) are treated special. Other annotations are turned into a
+			 * tree. Starting with ANNOTATED, and then properties. A property is
+			 * a PROPERTY property or an ANNOTATED property if it is an
+			 * annotation. If it is an array, the key is suffixed with the
+			 * index.
+			 * 
+			 * <pre>
+			 *  public @interface Outer { Inner[] value(); }
+			 * public @interface Inner { String[] value(); } @Outer(
+			 * { @Inner("1","2"}) } class Xyz {} ANNOTATED Outer
+			 * (CHANGED/CHANGED) ANNOTATED Inner (CHANGED/CHANGED) PROPERTY
+			 * value.0=1 (CHANGED/CHANGED) PROPERTY value.1=2 (CHANGED/CHANGED)
+			 * </pre>
+			 */
 			@Override
 			public void annotation(Annotation annotation) {
-				Collection<Element> properties = Create.set();
-				if (Deprecated.class.getName().equals(annotation.getName().getFQN())) {
-					if (memberEnd)
-						clazz.setDeprecated(true);
-					else if (last != null)
-						last.setDeprecated(true);
+				if (Deprecated.class.getName()
+					.equals(annotation.getName()
+						.getFQN())) {
 					return;
 				}
 
-				for (String key : annotation.keySet()) {
-					StringBuilder sb = new StringBuilder();
-					sb.append(key);
-					sb.append('=');
-					toString(sb, annotation.get(key));
-
-					properties.add(new Element(Type.PROPERTY, sb.toString(), null, CHANGED, CHANGED, null));
-				}
-
+				Element e = annotatedToElement(annotation);
 				if (memberEnd) {
-					members.add(new Element(Type.ANNOTATED, annotation.getName().getFQN(), properties, CHANGED,
-							CHANGED, null));
-					if (ProviderType.class.getName().equals(annotation.getName().getFQN())) {
+					members.add(e);
+
+					//
+					// Check for the provider/consumer. We use strings because
+					// these are not officially
+					// released yet
+					//
+					String name = annotation.getName()
+						.getFQN();
+					if ("aQute.bnd.annotation.ProviderType".equals(name)
+						|| "org.osgi.annotation.versioning.ProviderType".equals(name)) {
 						provider.set(true);
-					} else if (ConsumerType.class.getName().equals(annotation.getName().getFQN())) {
+					} else if ("aQute.bnd.annotation.ConsumerType".equals(name)
+						|| "org.osgi.annotation.versioning.ConsumerType".equals(name)) {
 						provider.set(false);
 					}
 				} else if (last != null)
-					annotations.add(last, new Element(Type.ANNOTATED, annotation.getName().getFQN(), properties,
-							CHANGED, CHANGED, null));
+					annotations.add(last, e);
 			}
 
-			private void toString(StringBuilder sb, Object object) {
+			/*
+			 * Return an ANNOTATED element for this annotation. An ANNOTATED
+			 * element contains either PROPERTY children or ANNOTATED children.
+			 */
+			private Element annotatedToElement(Annotation annotation) {
+				Collection<Element> properties = Create.set();
+				for (Entry<String, Object> entry : annotation.entrySet()) {
+					addAnnotationMember(properties, entry.getKey(), entry.getValue());
+				}
+				return new Element(ANNOTATED, annotation.getName()
+					.getFQN(), properties, CHANGED, CHANGED, null);
+			}
 
-				if (object.getClass().isArray()) {
-					sb.append('[');
-					int l = Array.getLength(object);
-					for (int i = 0; i < l; i++)
-						toString(sb, Array.get(object, i));
-					sb.append(']');
-				} else
-					sb.append(object);
+			/*
+			 * This method detects 3 cases: An Annotation, which means it
+			 * creates a new child ANNOTATED element, an array, which means it
+			 * will repeat recursively but suffixes the key with the index, or a
+			 * simple value which is turned into a string.
+			 */
+			private void addAnnotationMember(Collection<Element> properties, String key, Object member) {
+				if (member instanceof Annotation) {
+					properties.add(annotatedToElement((Annotation) member));
+				} else if (member.getClass()
+					.isArray()) {
+					int l = Array.getLength(member);
+					for (int i = 0; i < l; i++) {
+						addAnnotationMember(properties, key + "." + i, Array.get(member, i));
+					}
+				} else {
+					StringBuilder sb = new StringBuilder();
+					sb.append(key);
+					sb.append('=');
+					if (member instanceof String) {
+						sb.append("'");
+						sb.append(member);
+						sb.append("'");
+					} else
+						sb.append(member);
+
+					properties.add(new Element(PROPERTY, sb.toString(), null, CHANGED, CHANGED, null));
+				}
 			}
 
 			@Override
 			public void innerClass(TypeRef innerClass, TypeRef outerClass, String innerName, int innerClassAccessFlags)
-					throws Exception {
-				Clazz clazz = analyzer.findClass(innerClass);
-				if (clazz != null)
-					clazz.setInnerAccess(innerClassAccessFlags);
+				throws Exception {
+				innerAccess.computeIfAbsent(innerClass, k -> Integer.valueOf(innerClassAccessFlags));
 
 				if (Modifier.isProtected(innerClassAccessFlags) || Modifier.isPublic(innerClassAccessFlags))
 					return;
@@ -382,15 +467,15 @@ class JavaElement {
 
 		if (clazz.isInterface())
 			if (clazz.isAnnotation())
-				type = Type.INTERFACE;
+				type = ANNOTATION;
 			else
-				type = Type.ANNOTATION;
+				type = INTERFACE;
 		else if (clazz.isEnum())
-			type = Type.ENUM;
+			type = ENUM;
 		else
-			type = Type.CLASS;
+			type = CLASS;
 
-		if (type == Type.INTERFACE) {
+		if (type == INTERFACE) {
 			if (provider.get()) {
 				// Adding a method for a provider is not an issue
 				// because it must be aware of the changes
@@ -406,81 +491,46 @@ class JavaElement {
 				// method on the consumer
 				add = MAJOR;
 
-				// Removing a method is not an issue because the
-				// provider, which calls this contract must be
-				// aware of the removal
+				// Removing a method is not an issue for
+				// providers, however, consumers could potentially
+				// call through this interface :-(
 
-				remove = MINOR;
+				remove = MAJOR;
 			}
 		} else {
 			// Adding a method to a class can never do any harm
+			// except when the class is extended and the new
+			// method clashes with the new method. That is
+			// why API classes in general should be final, at
+			// least not extended by consumers.
 			add = MINOR;
 
 			// Removing it will likely hurt consumers
 			remove = MAJOR;
 		}
 
-		// Remove all synthetic methods, we need
-		// to treat them special for the covariant returns
-
-		Set<MethodDef> synthetic = Create.set();
-		for (Iterator<MethodDef> i = methods.iterator(); i.hasNext();) {
-			MethodDef m = i.next();
-			if (m.isSynthetic()) {
-				synthetic.add(m);
-				i.remove();
-			}
-		}
-
 		for (MethodDef m : methods) {
-			List<Element> children = annotations.get(m);
+			if (m.isSynthetic()) { // Ignore synthetic methods
+				continue;
+			}
+			Collection<Element> children = annotations.get(m);
 			if (children == null)
-				children = new ArrayList<Element>();
+				children = new HashSet<>();
 
-			access(children, m.getAccess(), m.isDeprecated());
-
-			// A final class cannot be extended, ergo,
-			// all methods defined in it are by definition
-			// final. However, marking them final (either
-			// on the method or inheriting it from the class)
-			// will create superfluous changes if we
-			// override a method from a super class that was not
-			// final. So we actually remove the final for methods
-			// in a final class.
-			if (clazz.isFinal())
-				children.remove(FINAL);
-
-			// for covariant types we need to add the return types
-			// and all the implemented and extended types. This is already
-			// do for us when we get the element of the return type.
-
-			getCovariantReturns(children, m.getType());
-
-			for (Iterator<MethodDef> i = synthetic.iterator(); i.hasNext();) {
-				MethodDef s = i.next();
-				if (s.getName().equals(m.getName()) && Arrays.equals(s.getPrototype(), m.getPrototype())) {
-					i.remove();
-					getCovariantReturns(children, s.getType());
+			// Annotations can have a default value, this is a new element
+			if ((type == ANNOTATION) && (m.getConstant() != null)) {
+				Object constant = m.getConstant();
+				String defaultValue;
+				if (constant.getClass()
+					.isArray()) {
+					defaultValue = Arrays.toString((Object[]) constant);
+				} else {
+					defaultValue = constant.toString();
 				}
+				children.add(new Element(DEFAULT, defaultValue, null, CHANGED, CHANGED, null));
 			}
 
-			Element member = new Element(Type.METHOD, m.getName() + toString(m.getPrototype()), children, add, remove,
-					null);
-
-			if (!members.add(member)) {
-				members.remove(member);
-				members.add(member);
-			}
-		}
-
-		/**
-		 * Repeat for the remaining synthetic methods
-		 */
-		for (MethodDef m : synthetic) {
-			List<Element> children = annotations.get(m);
-			if (children == null)
-				children = new ArrayList<Element>();
-			access(children, m.getAccess(), m.isDeprecated());
+			access(children, m.getAccess(), m.isDeprecated(), provider.get());
 
 			// A final class cannot be extended, ergo,
 			// all methods defined in it are by definition
@@ -493,14 +543,26 @@ class JavaElement {
 			if (clazz.isFinal())
 				children.remove(FINAL);
 
-			// for covariant types we need to add the return types
-			// and all the implemented and extended types. This is already
-			// do for us when we get the element of the return type.
+			children.add(getReturn(m.getType()));
 
-			getCovariantReturns(children, m.getType());
+			//
+			// Java default methods are concrete implementations of methods
+			// on an interface.
+			//
 
-			Element member = new Element(Type.METHOD, m.getName() + toString(m.getPrototype()), children, add, remove,
-					"synthetic");
+			if (clazz.isInterface() && !m.isAbstract()) {
+
+				//
+				// We have a Java 8 default method!
+				// Such a method is always a minor update
+				//
+
+				add = MINOR;
+			}
+
+			String signature = m.getName() + toString(m.getPrototype());
+			Element member = new Element(METHOD, signature, children, add,
+				provider.get() && !m.isPublic() ? MINOR : remove, null);
 
 			if (!members.add(member)) {
 				members.remove(member);
@@ -509,18 +571,23 @@ class JavaElement {
 		}
 
 		for (Clazz.FieldDef f : fields) {
-			List<Element> children = annotations.get(f);
+			if (f.isSynthetic()) { // Ignore synthetic fields
+				continue;
+			}
+			Collection<Element> children = annotations.get(f);
 			if (children == null)
-				children = new ArrayList<Element>();
+				children = new HashSet<>();
 
 			// Fields can have a constant value, this is a new element
 			if (f.getConstant() != null) {
-				children.add(new Element(Type.CONSTANT, f.getConstant().toString(), null, CHANGED, CHANGED, null));
+				children.add(new Element(CONSTANT, f.getConstant()
+					.toString(), null, CHANGED, CHANGED, null));
 			}
 
-			access(children, f.getAccess(), f.isDeprecated());
-			Element member = new Element(Type.FIELD, f.getType().getFQN() + " " + f.getName(), children, MINOR, MAJOR,
-					null);
+			access(children, f.getAccess(), f.isDeprecated(), provider.get());
+			children.add(getReturn(f.getType()));
+			Element member = new Element(FIELD, f.getName(), children, MINOR,
+				provider.get() && !f.isPublic() ? MINOR : MAJOR, null);
 
 			if (!members.add(member)) {
 				members.remove(member);
@@ -528,10 +595,12 @@ class JavaElement {
 			}
 		}
 
-		access(members, clazz.getAccess(), clazz.isDeprecated());
+		Integer inner_access_flags = innerAccess.get(clazz.getClassName());
+		int access_flags = (inner_access_flags != null) ? inner_access_flags.intValue() : clazz.getAccess();
+		access(members, access_flags, clazz.isDeprecated(), provider.get());
 
 		// And make the result
-		Element s = new Element(type, fqn, members, MINOR, MAJOR, comment.length() == 0 ? null : comment.toString());
+		Element s = new Element(type, fqn, members, MINOR, MAJOR, null);
 		cache.put(clazz, s);
 		return s;
 	}
@@ -549,99 +618,44 @@ class JavaElement {
 		return sb.toString();
 	}
 
-	static Element	BOOLEAN_R	= new Element(RETURN, "boolean");
-	static Element	BYTE_R		= new Element(RETURN, "byte");
-	static Element	SHORT_R		= new Element(RETURN, "short");
-	static Element	CHAR_R		= new Element(RETURN, "char");
-	static Element	INT_R		= new Element(RETURN, "int");
-	static Element	LONG_R		= new Element(RETURN, "long");
-	static Element	FLOAT_R		= new Element(RETURN, "float");
-	static Element	DOUBLE_R	= new Element(RETURN, "double");
-
-	private void getCovariantReturns(Collection<Element> elements, TypeRef type) throws Exception {
-		if (type == null || type.isObject())
-			return;
-
-		if (type.isPrimitive()) {
-			if (type.getFQN().equals("void"))
-				return;
-
-			String name = type.getBinary();
-			Element e;
-			switch (name.charAt(0)) {
-				case 'Z' :
-					e = BOOLEAN_R;
-					break;
-				case 'S' :
-					e = SHORT_R;
-					break;
-				case 'I' :
-					e = INT_R;
-					break;
-				case 'B' :
-					e = BYTE_R;
-					break;
-				case 'C' :
-					e = CHAR_R;
-					break;
-				case 'J' :
-					e = LONG_R;
-					break;
-				case 'F' :
-					e = FLOAT_R;
-					break;
-				case 'D' :
-					e = DOUBLE_R;
-					break;
-
-				default :
-					throw new IllegalArgumentException("Unknown primitive " + type);
-			}
-			elements.add(e);
-			return;
+	private Element getReturn(TypeRef type) {
+		if (!type.isPrimitive()) {
+			return type.isObject() ? OBJECT_R : new Element(RETURN, type.getFQN());
 		}
-
-		List<Element> set = covariant.get(type);
-		if (set != null) {
-			elements.addAll(set);
-			return;
+		switch (type.getBinary()
+			.charAt(0)) {
+			case 'V' :
+				return VOID_R;
+			case 'Z' :
+				return BOOLEAN_R;
+			case 'S' :
+				return SHORT_R;
+			case 'I' :
+				return INT_R;
+			case 'B' :
+				return BYTE_R;
+			case 'C' :
+				return CHAR_R;
+			case 'J' :
+				return LONG_R;
+			case 'F' :
+				return FLOAT_R;
+			case 'D' :
+				return DOUBLE_R;
+			default :
+				throw new IllegalArgumentException("Unknown primitive " + type);
 		}
-
-		Element current = new Element(RETURN, type.getFQN());
-		Clazz clazz = analyzer.findClass(type);
-		if (clazz == null) {
-			elements.add(current);
-			return;
-		}
-
-		set = Create.list();
-		set.add(current);
-		getCovariantReturns(set, clazz.getSuper());
-
-		TypeRef[] interfaces = clazz.getInterfaces();
-		if (interfaces != null)
-			for (TypeRef intf : interfaces) {
-				getCovariantReturns(set, intf);
-			}
-
-		covariant.put(type, set);
-		elements.addAll(set);
 	}
 
-	private static void access(Collection<Element> children, int access, @SuppressWarnings("unused") boolean deprecated) {
-		if (!isPublic(access))
-			children.add(PROTECTED);
-		if (isAbstract(access))
+	private static void access(Collection<Element> children, int access, @SuppressWarnings("unused") boolean deprecated,
+		boolean provider) {
+		if (!Modifier.isPublic(access))
+			children.add(provider ? PROTECTED_PROVIDER : PROTECTED);
+		if (Modifier.isAbstract(access))
 			children.add(ABSTRACT);
-		if (isFinal(access))
+		if (Modifier.isFinal(access))
 			children.add(FINAL);
-		if (isStatic(access))
+		if (Modifier.isStatic(access))
 			children.add(STATIC);
-
-		// Ignore for now
-		// if (deprecated)
-		// children.add(DEPRECATED);
-
 	}
-
 }

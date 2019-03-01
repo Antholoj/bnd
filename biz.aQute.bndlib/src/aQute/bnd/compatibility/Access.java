@@ -1,12 +1,16 @@
 package aQute.bnd.compatibility;
 
-import java.lang.reflect.*;
+import java.lang.reflect.Modifier;
 
 /**
  * Access modifier
  */
 public enum Access {
-	PUBLIC, PROTECTED, PACKAGE, PRIVATE, UNKNOWN;
+	PUBLIC,
+	PROTECTED,
+	PACKAGE,
+	PRIVATE,
+	UNKNOWN;
 
 	public static Access modifier(int mod) {
 		if (Modifier.isPublic(mod))

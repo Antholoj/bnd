@@ -1,15 +1,24 @@
--buildpath: biz.aQute.bndlib;version=project,\
+# Set javac settings from JDT prefs
+-include: ${workspace}/cnf/includes/jdt.bnd
+
+-dependson: demo
+
+-buildpath: \
+	osgi.core;version=4.2;maven-scope=provided,\
 	aQute.libg;version=project,\
-	osgi.core;version=4.2.1,\
-	junit.osgi;version=3.8.2,\
-	ee.j2se;version=${javac.ee}
-#	ee.minimum;version=1.2.1
-	
-	
+	biz.aQute.bndlib;version=latest,\
+	slf4j.api;version=latest
+
+-testpath: \
+	${junit},\
+	slf4j.simple;version=latest
+
 Launcher-Plugin: aQute.launcher.plugin.ProjectLauncherImpl
 
-Private-Package: aQute.launcher.*
-	
-Bundle-Version: 1.0.5
-javac.source = 1.5
-javac.target = jsr14
+-conditionalpackage: aQute.lib*
+
+Premain-Class: aQute.launcher.agent.LauncherAgent
+
+-builderignore: testresources
+
+-baseline: *

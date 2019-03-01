@@ -1,10 +1,13 @@
 package aQute.libg.cryptography;
 
-import java.io.*;
-import java.security.*;
+import java.io.File;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 
 public class SHA256 extends Digest {
-	public final static String	ALGORITHM	= "SHA256";
+	public final static String ALGORITHM = "SHA-256";
 
 	public static Digester<SHA256> getDigester(OutputStream... out) throws NoSuchAlgorithmException {
 		MessageDigest md = MessageDigest.getInstance(ALGORITHM);
@@ -35,14 +38,14 @@ public class SHA256 extends Digest {
 		return ALGORITHM;
 	}
 
-
-	public static SHA256 digest(byte [] data) throws Exception {
+	public static SHA256 digest(byte[] data) throws Exception {
 		return getDigester().from(data);
 	}
 
 	public static SHA256 digest(File f) throws NoSuchAlgorithmException, Exception {
 		return getDigester().from(f);
 	}
+
 	public static SHA256 digest(InputStream f) throws NoSuchAlgorithmException, Exception {
 		return getDigester().from(f);
 	}

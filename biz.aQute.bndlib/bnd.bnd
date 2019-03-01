@@ -1,62 +1,84 @@
--sourcepath:					../aQute.libg/src
+# Set javac settings from JDT prefs
+-include: ${workspace}/cnf/includes/jdt.bnd
 
-Bundle-SCM:						git://github.com/bndtools/bnd.git
-Bundle-Vendor: 					aQute SARL http://www.aQute.biz
-Bundle-Copyright:				Copyright © aQute SARL (2000, 2011). All Rights Reserved.
-Bundle-License: 				http://www.opensource.org/licenses/apache2.0.php; \
-									description="Apache Software License 2.0"; \
-									link=http://www.apache.org/licenses/LICENSE-2.0.html
-Bundle-DocURL:          		http://www.aQute.biz/Code/Bnd
-Bundle-Name: 					bndlib
-Bundle-Description:				A Swiss Army Knife for OSGi
-Bundle-SymbolicName: 	        biz.aQute.bndlib
+Bundle-Description: bndlib: A Swiss Army Knife for OSGi
 
-Private-Package: 				\
-	aQute.bnd.*, \
-	aQute.lib.*;-split-package:=first, \
-	aQute.libg.*;-split-package:=first, \
-	org.osgi.service.component.annotations,\
-	aQute.service.library,\
-	aQute.struct, \
-	aQute.library.*
-	
-Export-Package: aQute.bnd.annotation.*,\
-	aQute.bnd.osgi,\
-	aQute.bnd.osgi.resource,\
-	aQute.bnd.build,\
-	aQute.bnd.differ,\
-	aQute.bnd.service.*,\
-	aQute.bnd.help.*,\
-	org.osgi.service.repository,\
-	org.osgi.resource,\
-	aQute.bnd.header,\
-	aQute.bnd.version,\
-	aQute.bnd.filerepo,\
-	aQute.bnd.properties,\
-	aQute.bnd.build.model,\
-	aQute.bnd.build.model.clauses,\
-	aQute.service.reporter,\
-	aQute.bnd.maven.support
+-includepackage: \
+	aQute.bnd.*,\
+	aQute.lib.spring
 
-Conditional-Package:	        aQute.service.*, aQute.configurable
-Include-Resource: 				LICENSE, img/=img/
-Bundle-RequiredExecutionEnvironment: J2SE-1.5
+Export-Package: \
+	aQute.bnd.annotation.*;-noimport:=true,\
+	aQute.bnd.osgi;-noimport:=true,\
+	aQute.bnd.classfile;-noimport:=true,\
+	aQute.bnd.signatures;-noimport:=true,\
+	aQute.bnd.service.lifecycle;-noimport:=true,\
+	aQute.bnd.osgi.resource;-noimport:=true,\
+	aQute.bnd.maven;-noimport:=true,\
+	aQute.bnd.build;-noimport:=true,\
+	aQute.bnd.osgi.eclipse;-noimport:=true,\
+	aQute.bnd.http;-noimport:=true,\
+	aQute.bnd.differ;-noimport:=true,\
+	aQute.bnd.service.*;-noimport:=true,\
+	aQute.bnd.help.*;-noimport:=true,\
+	aQute.bnd.header;-noimport:=true,\
+	aQute.bnd.version;-noimport:=true,\
+	aQute.bnd.filerepo;-noimport:=true,\
+	aQute.lib.deployer;-noimport:=true,\
+	aQute.bnd.junit;-noimport:=true,\
+	aQute.bnd.properties;-noimport:=true,\
+	aQute.bnd.build.model;-noimport:=true,\
+	aQute.bnd.build.model.clauses;-noimport:=true,\
+	aQute.bnd.build.model.conversions;-noimport:=true,\
+	aQute.service.reporter;-noimport:=true,\
+	aQute.bnd.osgi.repository;-noimport:=true,\
+	aQute.bnd.maven.support;-noimport:=true,\
+	aQute.bnd.url;-noimport:=true,\
+	aQute.bnd.util.dto;-noimport:=true,\
+	aQute.bnd.util.home;-noimport:=true,\
+	aQute.bnd.util.repository;-noimport:=true,\
+	aQute.bnd.component.error;-noimport:=true,\
+	org.osgi.service.log;-split-package:=first,\
+	org.osgi.service.repository;-split-package:=first,\
+	org.osgi.util.promise;-split-package:=first,\
+	org.osgi.util.function;-split-package:=first
 
--buildpath: com.springsource.junit,\
-	osgi.cmpn;version=4.3,\
-	aQute.libg;version=project,\
-	osgi.core;version=4.1,\
-	osgi.r5;version=1.0.1,\
-	ee.j2se;version=${javac.ee},\
-	aQute.library.bndrepo;version=1.1.2
+-conditionalpackage: \
+	aQute.lib.*,\
+	aQute.libg.*,\
+	aQute.service.*,\
+	aQute.configurable,\
+	!org.osgi.service.*.annotations.*,\
+	!org.osgi.annotation.*,\
+	org.osgi.*
 
-Bundle-Version: 2.1.0.${tstamp;yyyyMMdd-HHmmss}
 Import-Package: junit.framework;resolution:=optional,\
-	org.osgi.resource;resolution:=optional,\
-	org.osgi.framework;version='[1.5,2)',\
+	org.osgi.service.repository,\
+	org.osgi.service.log,\
+	${replacelist;${retainall;${packages;CONDITIONAL};${packages;NAMED;org.osgi.*}};$;\\;provide:=false},\
 	*
+
+-includeresource: ${workspace}/LICENSE, img/=img/, {readme.md}
+
+-buildpath: \
+	osgi.annotation;version=latest;maven-scope=provided,\
+	osgi.core;version=latest;maven-scope=provided,\
+	org.osgi.namespace.contract;version=latest;maven-scope=provided,\
+	org.osgi.namespace.extender;version=latest;maven-scope=provided,\
+	org.osgi.namespace.implementation;version=latest;maven-scope=provided,\
+	org.osgi.namespace.service;version=latest;maven-scope=provided,\
+	org.osgi.service.log;version=latest;maven-scope=provided,\
+	org.osgi.service.repository;version=latest;maven-scope=provided,\
+	org.osgi.util.function;version=latest;maven-scope=provided,\
+	org.osgi.util.promise;version=latest;maven-scope=provided,\
+	aQute.libg;version=project, \
+	biz.aQute.bnd.annotation;version=project,\
+	slf4j.api;version=latest
 
 Bundle-Icon: img/bnd-64.png;size=64
 Bundle-Developers: peter.kriens@aQute.biz, njbartlett@gmail.com
 Bundle-Contributors: per.kristian.soreide@comactivity.net, ferry.huberts@pelagic.nl, bj@bjhargrave.com
-Bundle-SCM: git@github.com:bndtools/bnd.git
+
+-baseline: *
+
+-fixupmessages.converter: "Export aQute.bnd.http,* private references \\[aQute.lib.converter\\]"

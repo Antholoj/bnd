@@ -1,18 +1,26 @@
 package aQute.bnd.ant;
 
-import java.io.*;
-import java.util.*;
+import java.io.File;
+import java.util.ArrayList;
+import java.util.Hashtable;
+import java.util.Iterator;
+import java.util.List;
+import java.util.Properties;
 
-import org.apache.tools.ant.*;
-import org.apache.tools.ant.taskdefs.*;
-import org.apache.tools.ant.types.*;
+import org.apache.tools.ant.BuildException;
+import org.apache.tools.ant.taskdefs.Property;
+import org.apache.tools.ant.types.Path;
+import org.apache.tools.ant.types.Reference;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
-import aQute.bnd.build.*;
 import aQute.bnd.build.Project;
-import aQute.bnd.osgi.*;
+import aQute.bnd.build.Workspace;
+import aQute.bnd.osgi.Builder;
 import aQute.bnd.osgi.Jar;
-import aQute.bnd.osgi.eclipse.*;
-import aQute.libg.qtokens.*;
+import aQute.bnd.osgi.eclipse.EclipseClasspath;
+import aQute.lib.utf8properties.UTF8Properties;
+import aQute.libg.qtokens.QuotedTokenizer;
 
 /**
  * <p>
@@ -24,51 +32,46 @@ import aQute.libg.qtokens.*;
  * </p>
  * 
  * <pre>
- * &lt;target name="init" unless="initialized"&gt;
- *    &lt;taskdef classpath="${path.to.bnd.jar}" resource="aQute/bnd/ant/taskdef.properties"&gt;
- *    &lt;bndprepare basedir="${projectdir}" print="false" top="${release.dir}"/&gt;
- *    &lt;property name="initialized" value="set"/&gt;
- * &lt;/target&gt;
+ *  &lt;target name="init" unless="initialized"&gt; &lt;taskdef
+ * classpath="${path.to.bnd.jar}"
+ * resource="aQute/bnd/ant/taskdef.properties"&gt; &lt;bndprepare
+ * basedir="${projectdir}" print="false" top="${release.dir}"/&gt; &lt;property
+ * name="initialized" value="set"/&gt; &lt;/target&gt;
  * </pre>
  * <p>
  * To recursively build dependency projects, before building this project:
  * </p>
  * 
  * <pre>
- * &lt;target name="dependencies" depends="init" if="project.dependson" unless="donotrecurse"&gt;
- *    &lt;subant target="build" inheritAll="false" buildpath="${project.dependson}"&gt;
- *       &lt;property name="donotrecurse" value="true"/&gt;
- *    &lt;/subant&gt;
- * &lt;/target>
+ * &lt;target name="dependencies" depends="init" if="project.dependson"
+ * unless="donotrecurse"&gt; &lt;subant target="build" inheritAll="false"
+ * buildpath="${project.dependson}"&gt; &lt;property name="donotrecurse"
+ * value="true"/&gt; &lt;/subant&gt; &lt;/target>
  * </pre>
  * <p>
  * To build a bundle:
  * </p>
  * 
  * <pre>
- * &lt;target name="build" depends="compile"&gt;
- *    &lt;mkdir dir="${target}"/&gt;
- *    &lt;bnd command="build" exceptions="true" basedir="${project}"/&gt;
- * &lt;/target&gt;
+ *  &lt;target name="build" depends="compile"&gt; &lt;mkdir
+ * dir="${target}"/&gt; &lt;bnd command="build" exceptions="true"
+ * basedir="${project}"/&gt; &lt;/target&gt;
  * </pre>
  * <p>
  * To pass properties into bnd from ANT:
  * </p>
  * 
  * <pre>
- * &lt;target name="build" depends="compile"&gt;
- *    &lt;mkdir dir="${target}"/&gt;
- *    &lt;bnd command="build" exceptions="true" basedir="${project}"&gt;
- *        &lt;!-- Property will be set on the bnd Project: --&gt;
- *        &lt;property name="foo" value="bar"/&gt;
- * 
- *        &lt;!-- Property will be set on the bnd Workspace: --&gt;
- *        &lt;wsproperty name="foo" value="bar"/&gt;
- *    &lt;/bnd&gt;
- * &lt;/target&gt;
+ *  &lt;target name="build" depends="compile"&gt;
+ * &lt;mkdir dir="${target}"/&gt; &lt;bnd command="build" exceptions="true"
+ * basedir="${project}"&gt; &lt;!-- Property will be set on the bnd Project:
+ * --&gt; &lt;property name="foo" value="bar"/&gt; &lt;!-- Property will be set
+ * on the bnd Workspace: --&gt; &lt;wsproperty name="foo" value="bar"/&gt;
+ * &lt;/bnd&gt; &lt;/target&gt;
  * </pre>
  * 
- * @see {@link DeployTask} {@link ReleaseTask}
+ * @see DeployTask
+ * @see ReleaseTask
  */
 
 /*
@@ -90,17 +93,18 @@ import aQute.libg.qtokens.*;
  * </fileset> <bndfiles> </bnd> </target> </project> </pre>
  */
 public class BndTask extends BaseTask {
-	String			command;
-	File			basedir;
-
-	boolean			failok;
-	boolean			exceptions;
-	boolean			print;
+	private final static Logger	logger	= LoggerFactory.getLogger(BndTask.class);
+	String						command;
+	File						basedir;
+	boolean						test;
+	boolean						failok;
+	boolean						exceptions;
+	boolean						print;
 
 	// flags aiming to know how classpath & bnd descriptors were set
-	private boolean	classpathDirectlySet;
-	private Path	classpathReference;
-	private Path	bndfilePath;
+	private boolean				classpathDirectlySet;
+	private Path				classpathReference;
+	private Path				bndfilePath;
 
 	@Override
 	public void execute() throws BuildException {
@@ -138,15 +142,17 @@ public class BndTask extends BaseTask {
 				project.setProperty(prop.getName(), prop.getValue());
 			}
 
-			project.action(command);
+			if (test)
+				project.action(command, test);
+			else
+				project.action(command);
 
 			for (Project p : ws.getCurrentProjects())
 				ws.getInfo(p, p + ":");
 
 			if (report(ws))
 				throw new BuildException("Command " + command + " failed");
-		}
-		catch (Throwable e) {
+		} catch (Throwable e) {
 			if (exceptions)
 				e.printStackTrace();
 			throw new BuildException(e);
@@ -169,9 +175,9 @@ public class BndTask extends BaseTask {
 
 	// Old shit
 
-	List<File>	files		= new ArrayList<File>();
-	List<File>	classpath	= new ArrayList<File>();
-	List<File>	sourcepath	= new ArrayList<File>();
+	List<File>	files		= new ArrayList<>();
+	List<File>	classpath	= new ArrayList<>();
+	List<File>	sourcepath	= new ArrayList<>();
 	File		output		= null;
 	File		testDir		= null;
 	boolean		eclipse;
@@ -212,8 +218,10 @@ public class BndTask extends BaseTask {
 				// get them and merge them with the project
 				// properties, if the inherit flag is specified
 				if (inherit) {
-					Properties projectProperties = new Properties();
-					projectProperties.putAll((Map< ? , ? >) getProject().getProperties());
+					Properties projectProperties = new UTF8Properties();
+					@SuppressWarnings("unchecked")
+					Hashtable<Object, Object> antProps = getProject().getProperties();
+					projectProperties.putAll(antProps);
 					projectProperties.putAll(builder.getProperties());
 					builder.setProperties(projectProperties);
 				}
@@ -226,7 +234,8 @@ public class BndTask extends BaseTask {
 				boolean taskFailed = report();
 				boolean bndFailed = report(builder);
 
-				// Fail this build if failure is not ok and either the task failed or the bnd build failed.
+				// Fail this build if failure is not ok and either the task
+				// failed or the bnd build failed.
 				if (!failok && (taskFailed || bndFailed)) {
 					throw new BuildException("bnd failed", new org.apache.tools.ant.Location(file.getAbsolutePath()));
 				}
@@ -262,14 +271,14 @@ public class BndTask extends BaseTask {
 					} else {
 						msg = "(not modified)";
 					}
-					trace(jar.getName() + " (" + output.getName() + ") " + jar.getResources().size() + " " + msg);
+					logger.debug("{} ({}) {} {}", jar.getName(), output.getName(), jar.getResources()
+						.size(), msg);
 					report();
 					jar.close();
 				}
 				builder.close();
 			}
-		}
-		catch (Exception e) {
+		} catch (Exception e) {
 			// if (exceptions)
 			e.printStackTrace();
 			if (!failok)
@@ -283,7 +292,7 @@ public class BndTask extends BaseTask {
 	}
 
 	void addAll(List<File> list, String files, String separator) {
-		trace("addAll '%s' with %s", files, separator);
+		logger.debug("addAll '{}' with {}", files, separator);
 		QuotedTokenizer qt = new QuotedTokenizer(files, separator);
 		String entries[] = qt.getTokens();
 		File project = getProject().getBaseDir();
@@ -302,8 +311,13 @@ public class BndTask extends BaseTask {
 			addAll(classpath, value, File.pathSeparator + ",");
 		else {
 			String[] path = p.list();
-			for (int i = 0; i < path.length; i++)
-				classpath.add(new File(path[i]));
+			for (int i = 0; i < path.length; i++) {
+				File f = new File(path[i]);
+				if (f.exists())
+					classpath.add(f);
+				else
+					messages.NoSuchFile_(f.getAbsoluteFile());
+			}
 		}
 		classpathDirectlySet = true;
 	}
@@ -332,7 +346,7 @@ public class BndTask extends BaseTask {
 		addAll(this.sourcepath, sourcepath, File.pathSeparator + ",");
 	}
 
-	static File[]	EMPTY_FILES	= new File[0];
+	static File[] EMPTY_FILES = new File[0];
 
 	File[] toFiles(List<File> files, @SuppressWarnings("unused") String what) {
 		return files.toArray(EMPTY_FILES);
@@ -388,8 +402,7 @@ public class BndTask extends BaseTask {
 	/**
 	 * validate required parameters before starting execution
 	 * 
-	 * @throws BuildException
-	 *             , if build is impossible
+	 * @throws BuildException , if build is impossible
 	 */
 	protected void validate() {
 		// no one of the 2 classpaths handling styles are defined
@@ -422,7 +435,11 @@ public class BndTask extends BaseTask {
 
 	private void addFilesFrom(Path path, List<File> files) {
 		for (String fileName : path.list()) {
-			files.add(new File(fileName.replace('\\', '/')));
+			File f = new File(fileName.replace('\\', '/'));
+			if (f.exists())
+				files.add(f);
+			else
+				messages.NoSuchFile_(f.getAbsoluteFile());
 		}
 	}
 }

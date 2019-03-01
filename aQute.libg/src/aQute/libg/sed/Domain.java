@@ -1,9 +1,9 @@
 package aQute.libg.sed;
 
-import java.util.*;
+import java.util.Map;
 
 public interface Domain {
-	Map<String,String> getMap();
+	Map<String, String> getMap();
 
 	Domain getParent();
 }

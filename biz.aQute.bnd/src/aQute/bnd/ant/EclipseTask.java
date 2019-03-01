@@ -1,15 +1,19 @@
 package aQute.bnd.ant;
 
-import java.io.*;
-import java.util.*;
+import java.io.File;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.Iterator;
+import java.util.List;
+import java.util.StringTokenizer;
 
-import org.apache.tools.ant.*;
+import org.apache.tools.ant.BuildException;
 
-import aQute.bnd.osgi.eclipse.*;
+import aQute.bnd.osgi.eclipse.EclipseClasspath;
 
 public class EclipseTask extends BaseTask {
 	private String		prefix		= "project.";
-	private List<File>	prebuild	= new ArrayList<File>();
+	private List<File>	prebuild	= new ArrayList<>();
 	private File		workspaceLocation;
 	private String		separator	= ",";
 	private File		projectLocation;
@@ -32,24 +36,25 @@ public class EclipseTask extends BaseTask {
 
 			addProperty(prefix + "bootclasspath", join(eclipse.getBootclasspath(), separator));
 
-			if (!eclipse.getSourcepath().isEmpty())
+			if (!eclipse.getSourcepath()
+				.isEmpty())
 				addProperty(prefix + "sourcepath", join(eclipse.getSourcepath(), separator));
 
-			addProperty(prefix + "output", eclipse.getOutput().getAbsolutePath());
+			addProperty(prefix + "output", eclipse.getOutput()
+				.getAbsolutePath());
 
 			/**
 			 * The prebuild is an attribute that is prepended to the dependency
 			 * path derived from the Eclipse project
 			 */
 
-			List<File> dependents = new ArrayList<File>();
+			List<File> dependents = new ArrayList<>();
 			addCareful(dependents, prebuild);
 			addCareful(dependents, eclipse.getDependents());
 			if (dependents.size() > 0) {
 				addProperty(prefix + "buildpath", join(dependents, separator));
 			}
-		}
-		catch (Exception e) {
+		} catch (Exception e) {
 			throw new BuildException("Error during parsing Eclipse .classpath files", e);
 		}
 	}
@@ -74,7 +79,8 @@ public class EclipseTask extends BaseTask {
 	public void setPrebuild(String prebuild) {
 		StringTokenizer st = new StringTokenizer(prebuild, " ,");
 		while (st.hasMoreTokens()) {
-			this.prebuild.add(getFile(getProject().getBaseDir().getParentFile(), st.nextToken()));
+			this.prebuild.add(getFile(getProject().getBaseDir()
+				.getParentFile(), st.nextToken()));
 		}
 	}
 

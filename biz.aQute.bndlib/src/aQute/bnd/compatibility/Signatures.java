@@ -1,11 +1,19 @@
 package aQute.bnd.compatibility;
 
-import java.lang.reflect.*;
-import java.util.*;
+import java.lang.reflect.Constructor;
+import java.lang.reflect.Field;
+import java.lang.reflect.GenericArrayType;
+import java.lang.reflect.GenericDeclaration;
+import java.lang.reflect.Method;
+import java.lang.reflect.ParameterizedType;
+import java.lang.reflect.Type;
+import java.lang.reflect.TypeVariable;
+import java.lang.reflect.WildcardType;
+import java.util.HashMap;
+import java.util.Map;
 
 /**
- * This class is compiled against 1.5 or later to provide access to the generic
- * signatures. It can convert a Class, Field, Method or constructor to a generic
+ * This class can convert a Class, Field, Method or constructor to a generic
  * signature and it can normalize a signature. Both are methods. Normalized
  * signatures can be string compared and match even if the type variable names
  * differ.
@@ -13,22 +21,6 @@ import java.util.*;
  * @version $Id$
  */
 public class Signatures {
-
-	/**
-	 * Check if the environment has generics, i.e. later than Java 5 VM.
-	 * 
-	 * @return true if generics are supported
-	 * @throws Exception
-	 */
-	public boolean hasGenerics() throws Exception {
-		try {
-			call(Signatures.class, "getGenericSuperClass");
-			return true;
-		}
-		catch (NoSuchMethodException mnfe) {
-			return false;
-		}
-	}
 
 	/**
 	 * Helper class to track an index in a string.
@@ -73,15 +65,13 @@ public class Signatures {
 	/**
 	 * Calculate the generic signature of a Class,Method,Field, or Constructor.
 	 * 
-	 * @param f
-	 * @return
 	 * @throws Exception
 	 */
 	public String getSignature(Object c) throws Exception {
-		if (c instanceof Class< ? >)
-			return getSignature((Class< ? >) c);
-		if (c instanceof Constructor< ? >)
-			return getSignature((Constructor< ? >) c);
+		if (c instanceof Class<?>)
+			return getSignature((Class<?>) c);
+		if (c instanceof Constructor<?>)
+			return getSignature((Constructor<?>) c);
 		if (c instanceof Method)
 			return getSignature((Method) c);
 		if (c instanceof Field)
@@ -94,18 +84,16 @@ public class Signatures {
 	 * Calculate the generic signature of a Class. A Class consists of:
 	 * 
 	 * <pre>
-	 * 	  class        ::= declaration? reference reference*
+	 * class ::= declaration? reference reference*
 	 * </pre>
 	 * 
-	 * @param f
-	 * @return
 	 * @throws Exception
 	 */
-	public String getSignature(Class< ? > c) throws Exception {
+	public String getSignature(Class<?> c) throws Exception {
 		StringBuilder sb = new StringBuilder();
 		declaration(sb, c);
-		reference(sb, call(c, "getGenericSuperclass"));
-		for (Object type : (Object[]) call(c, "getGenericInterfaces")) {
+		reference(sb, c.getGenericSuperclass());
+		for (Type type : c.getGenericInterfaces()) {
 			reference(sb, type);
 		}
 		return sb.toString();
@@ -115,22 +103,20 @@ public class Signatures {
 	 * Calculate the generic signature of a Method. A Method consists of:
 	 * 
 	 * <pre>
-	 *    method ::= declaration? '(' reference* ')' reference
+	 * method ::= declaration? '(' reference* ')' reference
 	 * </pre>
 	 * 
-	 * @param c
-	 * @return
 	 * @throws Exception
 	 */
 	public String getSignature(Method m) throws Exception {
 		StringBuilder sb = new StringBuilder();
 		declaration(sb, m);
 		sb.append('(');
-		for (Object type : (Object[]) call(m, "getGenericParameterTypes")) {
+		for (Type type : m.getGenericParameterTypes()) {
 			reference(sb, type);
 		}
 		sb.append(')');
-		reference(sb, call(m, "getGenericReturnType"));
+		reference(sb, m.getGenericReturnType());
 		return sb.toString();
 	}
 
@@ -139,18 +125,17 @@ public class Signatures {
 	 * of:
 	 * 
 	 * <pre>
-	 *    constructor ::= declaration? '(' reference* ')V'
+	 *  constructor ::= declaration? '(' reference* ')V'
 	 * </pre>
 	 * 
 	 * @param c
-	 * @return
 	 * @throws Exception
 	 */
-	public String getSignature(Constructor< ? > c) throws Exception {
+	public String getSignature(Constructor<?> c) throws Exception {
 		StringBuilder sb = new StringBuilder();
 		declaration(sb, c);
 		sb.append('(');
-		for (Object type : (Object[]) call(c, "getGenericParameterTypes")) {
+		for (Type type : c.getGenericParameterTypes()) {
 			reference(sb, type);
 		}
 		sb.append(')');
@@ -162,52 +147,48 @@ public class Signatures {
 	 * Calculate the generic signature of a Field. A Field consists of:
 	 * 
 	 * <pre>
-	 *    constructor ::= reference
+	 * constructor ::= reference
 	 * </pre>
 	 * 
-	 * @param c
-	 * @return
 	 * @throws Exception
 	 */
 	public String getSignature(Field f) throws Exception {
 		StringBuilder sb = new StringBuilder();
-		Object t = call(f, "getGenericType");
+		Type t = f.getGenericType();
 		reference(sb, t);
 		return sb.toString();
 	}
 
-/**
+	/**
 	 * Classes, Methods, or Constructors can have a declaration that provides
-	 * nested a scope for type variables. A Method/Constructor inherits
-	 * the type variables from its class and a class inherits its type variables
-	 * from its outer class. The declaration consists of the following
-	 * syntax:
+	 * nested a scope for type variables. A Method/Constructor inherits the type
+	 * variables from its class and a class inherits its type variables from its
+	 * outer class. The declaration consists of the following syntax:
+	 * 
 	 * <pre>
-	 *    declarations ::= '<' declaration ( ',' declaration )* '>'
-	 *    declaration  ::= identifier ':' declare
-	 *    declare      ::= types | variable 
-	 *    types        ::= ( 'L' class ';' )? ( ':' 'L' interface ';' )*
-	 *    variable     ::= 'T' id ';'
+	 * declarations ::= '<' declaration ( ',' declaration )* '>' declaration ::=
+	 * identifier ':' declare declare ::= types | variable types ::= ( 'L' class
+	 * ';' )? ( ':' 'L' interface ';' )* variable ::= 'T' id ';'
 	 * </pre>
 	 * 
 	 * @param sb
 	 * @param gd
- * @throws Exception 
+	 * @throws Exception
 	 */
-	private void declaration(StringBuilder sb, Object gd) throws Exception {
-		Object[] typeParameters = (Object[]) call(gd, "getTypeParameters");
+	private void declaration(StringBuilder sb, GenericDeclaration gd) throws Exception {
+		TypeVariable<?>[] typeParameters = gd.getTypeParameters();
 		if (typeParameters.length > 0) {
 			sb.append('<');
-			for (Object tv : typeParameters) {
-				sb.append(call(tv, "getName"));
+			for (TypeVariable<?> tv : typeParameters) {
+				sb.append(tv.getName());
 
-				Object[] bounds = (Object[]) call(tv, "getBounds");
+				Type[] bounds = tv.getBounds();
 				if (bounds.length > 0 && isInterface(bounds[0])) {
 					sb.append(':');
 				}
-				for (int i = 0; i < bounds.length; i++) {
+				for (Type bound : bounds) {
 					sb.append(':');
-					reference(sb, bounds[i]);
+					reference(sb, bound);
 				}
 			}
 			sb.append('>');
@@ -217,80 +198,82 @@ public class Signatures {
 	/**
 	 * Verify that the type is an interface.
 	 * 
-	 * @param type
-	 *            the type to check.
+	 * @param type the type to check.
 	 * @return true if this is a class that is an interface or a Parameterized
 	 *         Type that is an interface
 	 * @throws Exception
 	 */
-	private boolean isInterface(Object type) throws Exception {
+	private boolean isInterface(Type type) throws Exception {
 		if (type instanceof Class)
-			return (((Class< ? >) type).isInterface());
+			return ((Class<?>) type).isInterface();
 
-		if (isInstance(type.getClass(), "java.lang.reflect.ParameterizedType"))
-			return isInterface(call(type, "getRawType"));
+		if (type instanceof ParameterizedType)
+			return isInterface(((ParameterizedType) type).getRawType());
 
 		return false;
 	}
 
-/**
-	 * This is the heart of the signature builder. A reference is used
-	 * in a lot of places. It referes to another type.
+	/**
+	 * This is the heart of the signature builder. A reference is used in a lot
+	 * of places. It referes to another type.
+	 * 
 	 * <pre>
-	 *   reference     ::= array | class | primitive | variable
-	 *   array         ::= '[' reference
-	 *   class         ::=  'L' body ( '.' body )* ';'
-	 *   body          ::=  id ( '<' ( wildcard | reference )* '>' )?
-	 *   variable      ::=  'T' id ';'
-	 *   primitive     ::= PRIMITIVE
+	 *  reference ::= array | class
+	 * | primitive | variable array ::= '[' reference class ::= 'L' body ( '.'
+	 * body )* ';' body ::= id ( '<' ( wildcard | reference )* '>' )? variable
+	 * ::= 'T' id ';' primitive ::= PRIMITIVE
 	 * </pre>
 	 * 
 	 * @param sb
 	 * @param t
- * @throws Exception 
+	 * @throws Exception
 	 */
-	private void reference(StringBuilder sb, Object t) throws Exception {
-
-		if (isInstance(t.getClass(), "java.lang.reflect.ParameterizedType")) {
+	private void reference(StringBuilder sb, Type t) throws Exception {
+		if (t instanceof ParameterizedType) {
+			ParameterizedType pt = (ParameterizedType) t;
 			sb.append('L');
-			parameterizedType(sb, t);
+			parameterizedType(sb, pt);
 			sb.append(';');
 			return;
-		} else if (isInstance(t.getClass(), "java.lang.reflect.GenericArrayType")) {
+		} else if (t instanceof GenericArrayType) {
+			GenericArrayType gat = (GenericArrayType) t;
 			sb.append('[');
-			reference(sb, call(t, "getGenericComponentType"));
-		} else if (isInstance(t.getClass(), "java.lang.reflect.WildcardType")) {
-			Object[] lowerBounds = (Object[]) call(t, "getLowerBounds");
-			Object[] upperBounds = (Object[]) call(t, "getUpperBounds");
+			reference(sb, gat.getGenericComponentType());
+		} else if (t instanceof WildcardType) {
+			WildcardType wt = (WildcardType) t;
+			Type[] lowerBounds = wt.getLowerBounds();
+			Type[] upperBounds = wt.getUpperBounds();
 
 			if (upperBounds.length == 1 && upperBounds[0] == Object.class)
-				upperBounds = new Object[0];
+				upperBounds = new Type[0];
 
 			if (upperBounds.length != 0) {
 				// extend
-				for (Object upper : upperBounds) {
+				for (Type upper : upperBounds) {
 					sb.append('+');
 					reference(sb, upper);
 				}
 			} else if (lowerBounds.length != 0) {
 				// super, can only be one by the language
-				for (Object lower : lowerBounds) {
+				for (Type lower : lowerBounds) {
 					sb.append('-');
 					reference(sb, lower);
 				}
 			} else
 				sb.append('*');
-		} else if (isInstance(t.getClass(), "java.lang.reflect.TypeVariable")) {
+		} else if (t instanceof TypeVariable) {
+			TypeVariable<?> tv = (TypeVariable<?>) t;
 			sb.append('T');
-			sb.append(call(t, "getName"));
+			sb.append(tv.getName());
 			sb.append(';');
-		} else if (t instanceof Class< ? >) {
-			Class< ? > c = (Class< ? >) t;
+		} else if (t instanceof Class<?>) {
+			Class<?> c = (Class<?>) t;
 			if (c.isPrimitive()) {
 				sb.append(primitive(c));
 			} else {
 				sb.append('L');
-				String name = c.getName().replace('.', '/');
+				String name = c.getName()
+					.replace('.', '/');
 				sb.append(name);
 				sb.append(';');
 			}
@@ -305,14 +288,16 @@ public class Signatures {
 	 * @param pt
 	 * @throws Exception
 	 */
-	private void parameterizedType(StringBuilder sb, Object pt) throws Exception {
-		Object owner = call(pt, "getOwnerType");
-		String name = ((Class< ? >) call(pt, "getRawType")).getName().replace('.', '/');
+	private void parameterizedType(StringBuilder sb, ParameterizedType pt) throws Exception {
+		String name = ((Class<?>) pt.getRawType()).getName()
+			.replace('.', '/');
+		Type owner = pt.getOwnerType();
 		if (owner != null) {
-			if (isInstance(owner.getClass(), "java.lang.reflect.ParameterizedType"))
-				parameterizedType(sb, owner);
+			if (owner instanceof ParameterizedType)
+				parameterizedType(sb, (ParameterizedType) owner);
 			else
-				sb.append(((Class< ? >) owner).getName().replace('.', '/'));
+				sb.append(((Class<?>) owner).getName()
+					.replace('.', '/'));
 			sb.append('.');
 			int n = name.lastIndexOf('$');
 			name = name.substring(n + 1);
@@ -320,7 +305,7 @@ public class Signatures {
 		sb.append(name);
 
 		sb.append('<');
-		for (Object parameterType : (Object[]) call(pt, "getActualTypeArguments")) {
+		for (Type parameterType : pt.getActualTypeArguments()) {
 			reference(sb, parameterType);
 		}
 		sb.append('>');
@@ -330,11 +315,10 @@ public class Signatures {
 	/**
 	 * Handle primitives, these need to be translated to a single char.
 	 * 
-	 * @param type
-	 *            the primitive class
+	 * @param type the primitive class
 	 * @return the single char associated with the primitive
 	 */
-	private char primitive(Class< ? > type) {
+	private char primitive(Class<?> type) {
 		if (type == byte.class)
 			return 'B';
 		else if (type == char.class)
@@ -368,7 +352,7 @@ public class Signatures {
 
 	public String normalize(String signature) {
 		StringBuilder sb = new StringBuilder();
-		Map<String,String> map = new HashMap<String,String>();
+		Map<String, String> map = new HashMap<>();
 		Rover rover = new Rover(signature);
 		declare(sb, map, rover);
 
@@ -399,7 +383,7 @@ public class Signatures {
 	 * @param rover
 	 * @param primitivesAllowed
 	 */
-	private void reference(StringBuilder sb, Map<String,String> map, Rover rover, boolean primitivesAllowed) {
+	private void reference(StringBuilder sb, Map<String, String> map, Rover rover, boolean primitivesAllowed) {
 
 		char type = rover.take();
 		sb.append(type);
@@ -435,7 +419,7 @@ public class Signatures {
 	 * @param map
 	 * @param rover
 	 */
-	private void body(StringBuilder sb, Map<String,String> map, Rover rover) {
+	private void body(StringBuilder sb, Map<String, String> map, Rover rover) {
 		if (rover.peek() == '<') {
 			sb.append(rover.take('<'));
 			while (rover.peek() != '>') {
@@ -476,7 +460,7 @@ public class Signatures {
 	 * @param map
 	 * @param rover
 	 */
-	private void declare(StringBuilder sb, Map<String,String> map, Rover rover) {
+	private void declare(StringBuilder sb, Map<String, String> map, Rover rover) {
 		char c = rover.peek();
 		if (c == '<') {
 			sb.append(rover.take('<'));
@@ -505,40 +489,15 @@ public class Signatures {
 	 * Handles the assignment of type variables to index names so that we have a
 	 * normalized name for each type var.
 	 * 
-	 * @param map
-	 *            the map with variables.
-	 * @param name
-	 *            The name of the variable
+	 * @param map the map with variables.
+	 * @param name The name of the variable
 	 * @return the index name, like _1
 	 */
-	private String assign(Map<String,String> map, String name) {
+	private String assign(Map<String, String> map, String name) {
 		if (map.containsKey(name))
 			return map.get(name);
 		int n = map.size();
 		map.put(name, "_" + n);
 		return "_" + n;
 	}
-
-	private boolean isInstance(Class< ? > type, String string) {
-		if (type == null)
-			return false;
-
-		if (type.getName().equals(string))
-			return true;
-
-		if (isInstance(type.getSuperclass(), string))
-			return true;
-
-		for (Class< ? > intf : type.getInterfaces()) {
-			if (isInstance(intf, string))
-				return true;
-		}
-		return false;
-	}
-
-	private Object call(Object gd, String string) throws Exception {
-		Method m = gd.getClass().getMethod(string);
-		return m.invoke(gd);
-	}
-
 }

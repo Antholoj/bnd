@@ -1,13 +1,16 @@
 package aQute.lib.spring;
 
-import java.util.*;
+import java.util.ArrayList;
+import java.util.List;
 
-import aQute.bnd.header.*;
-import aQute.bnd.osgi.*;
-import aQute.bnd.service.*;
+import aQute.bnd.header.Parameters;
+import aQute.bnd.osgi.Analyzer;
+import aQute.bnd.osgi.Processor;
+import aQute.bnd.service.AnalyzerPlugin;
 
 public class XMLTypeProcessor implements AnalyzerPlugin {
 
+	@Override
 	public boolean analyzeJar(Analyzer analyzer) throws Exception {
 		List<XMLType> types = getTypes(analyzer);
 		for (XMLType type : types) {
@@ -17,7 +20,7 @@ public class XMLTypeProcessor implements AnalyzerPlugin {
 	}
 
 	protected List<XMLType> getTypes(@SuppressWarnings("unused") Analyzer analyzer) throws Exception {
-		return new ArrayList<XMLType>();
+		return new ArrayList<>();
 	}
 
 	protected void process(List<XMLType> types, String resource, String paths, String pattern) throws Exception {

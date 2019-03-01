@@ -1,22 +1,22 @@
-Private-Package: com.example.demo, test
-Bundle-Activator: com.example.demo.Activator
+# Set javac settings from JDT prefs
+-include: ${workspace}/cnf/includes/jdt.bnd
+
+Private-Package: \
+	com.example.demo,\
+	test
+Bundle-Version: 1.0.0
 Bundle-SymbolicName: demo
 
--buildpath: osgi.core,\
-	ee.minimum;version=1.2.1,\
-	ee.j2se;version=${javac.ee}
-	
-	
--testpath: \
-	biz.aQute.junit; version=snapshot
+-tester: \
+    biz.aQute.tester;version=snapshot
 
 -runpath: \
-	org.apache.felix.framework;version='[2.0.5,2.0.5]', \
+	org.apache.felix.framework;version='[5.6.8,6)', \
 	biz.aQute.launcher; version=snapshot
- 	
+
 -runbundles: org.apache.felix.scr,\
-	org.apache.felix.configadmin
-	
+	org.apache.felix.configadmin, \
+	${junit}
 
 Bundle-Activator: test.TestActivator
 
@@ -24,12 +24,30 @@ Import-Package: \
 	junit.framework;resolution:=optional,\
 	*
 
--buildpath: osgi.core,\
-	ee.minimum;version=1.2.1,\
-	junit.osgi
-	
-javac.target=1.4
-javac.source=1.4
+-buildpath: \
+	osgi.annotation;version=latest;maven-scope=provided,\
+	osgi.core;version=latest;maven-scope=provided,\
+	${junit}
 
 -runtrace: true
+-runvm: 
+#"-Xrunjdwp:transport=dt_socket,server=y,suspend=y,address=1044"
+
 -runee: JavaSE-1.6
+
+base.version:   1.1.0
+
+-nojunit: true
+-nojunitosgi: true
+test-reports: demotest-reports
+-buildrepo:
+-releaserepo:
+Export-Package: \
+	test.api
+
+-runproperties.testlauncher1: in.project=project
+-runproperties.testlauncher2: in.bndrun=project
+
+-exporttype: bnd.executablejar;foo=bnd, bnd.runbundles;bar=bnd
+
+-includeresource: x.bndrun

@@ -1,56 +1,67 @@
 package aQute.bnd.osgi.eclipse;
 
-import java.io.*;
-import java.util.*;
-import java.util.regex.*;
+import java.io.File;
+import java.io.FileNotFoundException;
+import java.io.IOException;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.StringTokenizer;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
-import javax.xml.parsers.*;
+import javax.xml.parsers.DocumentBuilder;
+import javax.xml.parsers.DocumentBuilderFactory;
+import javax.xml.parsers.ParserConfigurationException;
 
-import org.w3c.dom.*;
-import org.xml.sax.*;
+import org.w3c.dom.Document;
+import org.w3c.dom.NamedNodeMap;
+import org.w3c.dom.Node;
+import org.w3c.dom.NodeList;
+import org.xml.sax.SAXException;
 
-import aQute.service.reporter.*;
+import aQute.service.reporter.Reporter;
 
 /**
  * Parse the Eclipse project information for the classpath. Unfortunately, it is
  * impossible to read the variables. They are ignored but that can cause
- * problems.
- * 
- * @version $Revision: 1.2 $
+ * problems. @version $Revision: 1.2 $
  */
 public class EclipseClasspath {
 	static DocumentBuilderFactory	documentBuilderFactory	= DocumentBuilderFactory.newInstance();
 	DocumentBuilder					db;
 	File							project;
 	File							workspace;
-	Set<File>						sources					= new LinkedHashSet<File>();
-	Set<File>						allSources				= new LinkedHashSet<File>();
+	Set<File>						sources					= new LinkedHashSet<>();
+	Set<File>						allSources				= new LinkedHashSet<>();
 
-	Set<File>						classpath				= new LinkedHashSet<File>();
-	List<File>						dependents				= new ArrayList<File>();
+	Set<File>						classpath				= new LinkedHashSet<>();
+	List<File>						dependents				= new ArrayList<>();
 	File							output;
 	boolean							recurse					= true;
-	Set<File>						exports					= new LinkedHashSet<File>();
-	Map<String,String>				properties				= new HashMap<String,String>();
+	Set<File>						exports					= new LinkedHashSet<>();
+	Map<String, String>				properties				= new HashMap<>();
 	Reporter						reporter;
 	int								options;
-	Set<File>						bootclasspath			= new LinkedHashSet<File>();
+	Set<File>						bootclasspath			= new LinkedHashSet<>();
 
 	public final static int			DO_VARIABLES			= 1;
 
 	/**
 	 * Parse an Eclipse project structure to discover the classpath.
 	 * 
-	 * @param workspace
-	 *            Points to workspace
-	 * @param project
-	 *            Points to project
+	 * @param workspace Points to workspace
+	 * @param project Points to project
 	 * @throws ParserConfigurationException
 	 * @throws SAXException
 	 * @throws IOException
 	 */
 
-	public EclipseClasspath(Reporter reporter, File workspace, File project, @SuppressWarnings("unused") int options) throws Exception {
+	public EclipseClasspath(Reporter reporter, File workspace, File project, @SuppressWarnings("unused") int options)
+		throws Exception {
 		this.project = project.getCanonicalFile();
 		this.workspace = workspace.getCanonicalFile();
 		this.reporter = reporter;
@@ -67,10 +78,8 @@ public class EclipseClasspath {
 	 * Recursive routine to parse the files. If a sub project is detected, it is
 	 * parsed before the parsing continues. This should give the right order.
 	 * 
-	 * @param project
-	 *            Project directory
-	 * @param top
-	 *            If this is the top project
+	 * @param project Project directory
+	 * @param top If this is the top project
 	 * @throws ParserConfigurationException
 	 * @throws SAXException
 	 * @throws IOException
@@ -81,7 +90,8 @@ public class EclipseClasspath {
 			throw new FileNotFoundException(".classpath file not found: " + file.getAbsolutePath());
 
 		Document doc = db.parse(file);
-		NodeList nodelist = doc.getDocumentElement().getElementsByTagName("classpathentry");
+		NodeList nodelist = doc.getDocumentElement()
+			.getElementsByTagName("classpathentry");
 
 		if (nodelist == null)
 			throw new IllegalArgumentException("Can not find classpathentry in classpath file");
@@ -115,7 +125,8 @@ public class EclipseClasspath {
 				boolean exported = "true".equalsIgnoreCase(get(attrs, "exported"));
 				if (top || exported) {
 					File jar = getFile(workspace, project, path);
-					if (jar.getName().startsWith("ee."))
+					if (jar.getName()
+						.startsWith("ee."))
 						bootclasspath.add(jar);
 					else
 						classpath.add(jar);
@@ -165,11 +176,11 @@ public class EclipseClasspath {
 
 		if (!result.exists())
 			System.err.println("File not found: project=" + project + " workspace=" + workspace + " path=" + opath
-					+ " file=" + result);
+				+ " file=" + result);
 		return result;
 	}
 
-	static Pattern	PATH	= Pattern.compile("([A-Z_]+)/(.*)");
+	static Pattern PATH = Pattern.compile("([A-Z_]+)/(.*)");
 
 	private File replaceVar(String path) {
 		if ((options & DO_VARIABLES) == 0)
@@ -185,9 +196,9 @@ public class EclipseClasspath {
 				File f = new File(b, remainder.replace('/', File.separatorChar));
 				return f;
 			}
-			reporter.error("Can't find replacement variable for: " + path);
+			reporter.error("Can't find replacement variable for: %s", path);
 		} else
-			reporter.error("Cant split variable path: " + path);
+			reporter.error("Cant split variable path: %s", path);
 		return null;
 	}
 
@@ -223,7 +234,7 @@ public class EclipseClasspath {
 		return exports;
 	}
 
-	public void setProperties(Map<String,String> map) {
+	public void setProperties(Map<String, String> map) {
 		this.properties = map;
 	}
 

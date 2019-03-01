@@ -1,10 +1,14 @@
 package aQute.bnd.service;
 
-import java.io.*;
-import java.net.*;
-import java.util.*;
+import java.io.File;
+import java.io.InputStream;
+import java.net.URI;
+import java.util.List;
+import java.util.Map;
+import java.util.SortedSet;
 
-import aQute.bnd.version.*;
+import aQute.bnd.osgi.Processor;
+import aQute.bnd.version.Version;
 
 /**
  * A Repository Plugin abstract a bnd repository. This interface allows bnd to
@@ -24,20 +28,39 @@ public interface RepositoryPlugin {
 		 * The <b>SHA1</b> digest of the artifact to put into the repository.
 		 * When specified the digest of the <b>fetched</b> artifact will be
 		 * calculated and verified against this digest, <b>before</b> putting
-		 * the artifact into the repository. </p> An exception is thrown if the
-		 * specified digest and the calculated digest do not match.
+		 * the artifact into the repository.
+		 * </p>
+		 * An exception is thrown if the specified digest and the calculated
+		 * digest do not match.
 		 */
-		public byte[]	digest	= null;
+		public byte[]				digest	= null;
 
 		/**
 		 * Specify the mime type of the importing stream. This can be either
 		 * {@link #BUNDLE} or {@link #LIB}. If left open, it is up to the
 		 * repository to guess the content type.
 		 */
-		public String	type;
+		public String				type;
+
+		/**
+		 * When set, the repository must use it as the bsn
+		 */
+		public String				bsn		= null;
+
+		/**
+		 * When set, the repository must use it as the version
+		 */
+		public Version				version	= null;
+
+		/**
+		 * Provides the context. This is an optional parameter but if possible
+		 * should link to the closest context of the dumped artifact. It will be
+		 * used for reporting and getting properties/instructions.
+		 */
+		public Processor			context;
 	}
 
-	PutOptions	DEFAULTOPTIONS	= new PutOptions();
+	PutOptions DEFAULTOPTIONS = new PutOptions();
 
 	/**
 	 * Results returned by the put operation
@@ -60,32 +83,32 @@ public interface RepositoryPlugin {
 		 * repository rewrote the stream for optimization reason. If the
 		 */
 		public byte[]	digest		= null;
+
+		/**
+		 * Set to true if this artifact was already released
+		 */
+		public boolean	alreadyReleased;
 	}
 
 	/**
 	 * Put an artifact (from the InputStream) into the repository.<br/>
 	 * <br/>
-	 * There is NO guarantee that the artifact on the input stream has not been
-	 * modified after it's been put in the repository since that is dependent on
-	 * the implementation of the repository (see
-	 * {@link RepositoryPlugin.PutOptions#allowArtifactChange}).
+	 * There is <b>no guarantee</b> that the artifact on the input stream has
+	 * not been modified after it's been put in the repository since that is
+	 * dependent on the implementation of the repository.
 	 * 
-	 * @param stream
-	 *            The input stream with the artifact
-	 * @param options
-	 *            The put options. See {@link RepositoryPlugin.PutOptions}, can
-	 *            be {@code null}, which will then take the default options like
-	 *            new PutOptions().
+	 * @param stream The input stream with the artifact
+	 * @param options The put options. See {@link RepositoryPlugin.PutOptions},
+	 *            can be {@code null}, which will then take the default options
+	 *            like new PutOptions().
 	 * @return The result of the put, never null. See
 	 *         {@link RepositoryPlugin.PutResult}
-	 * @throws Exception
-	 *             When the repository root directory doesn't exist, when the
-	 *             repository is read-only, when the specified checksum doesn't
-	 *             match the checksum of the fetched artifact (see
+	 * @throws Exception When the repository root directory doesn't exist, when
+	 *             the repository is read-only, when the specified checksum
+	 *             doesn't match the checksum of the fetched artifact (see
 	 *             {@link RepositoryPlugin.PutOptions#digest}), when the
-	 *             implementation wants to modify the artifact but isn't allowed
-	 *             (see {@link RepositoryPlugin.PutOptions#allowArtifactChange}
-	 *             ), or when another error has occurred.
+	 *             implementation wants to modify the artifact but isn't
+	 *             allowed, or when another error has occurred.
 	 */
 	PutResult put(InputStream stream, PutOptions options) throws Exception;
 
@@ -100,10 +123,8 @@ public interface RepositoryPlugin {
 		 * Called when the file is successfully downloaded from a remote
 		 * repository.
 		 * 
-		 * @param file
-		 *            The file that was downloaded
-		 * @throws Exception
-		 *             , are logged and ignored
+		 * @param file The file that was downloaded
+		 * @throws Exception , are logged and ignored
 		 */
 		void success(File file) throws Exception;
 
@@ -111,10 +132,8 @@ public interface RepositoryPlugin {
 		 * Called when the file could not be downloaded from a remote
 		 * repository.
 		 * 
-		 * @param file
-		 *            The file that was intended to be downloaded.
-		 * @throws Exception
-		 *             , are logged and ignored
+		 * @param file The file that was intended to be downloaded.
+		 * @throws Exception , are logged and ignored
 		 */
 		void failure(File file, String reason) throws Exception;
 
@@ -124,14 +143,11 @@ public interface RepositoryPlugin {
 		 * downloads can be restarted, it is possible that the percentage
 		 * decreases.
 		 * 
-		 * @param file
-		 *            The file that was intended to be downloaded
-		 * @param percentage
-		 *            Percentage of file downloaded (can go down)
+		 * @param file The file that was intended to be downloaded
+		 * @param percentage Percentage of file downloaded (can go down)
 		 * @return true if the download should continue, fails if it should be
 		 *         canceled (and fail)
-		 * @throws Exception
-		 *             , are logged and ignored
+		 * @throws Exception , are logged and ignored
 		 */
 		boolean progress(File file, int percentage) throws Exception;
 	}
@@ -149,20 +165,16 @@ public interface RepositoryPlugin {
 	 * the downloads were done synchronously in the call, then no overlap of
 	 * downloads could take place.
 	 * 
-	 * @param bsn
-	 *            Bundle-SymbolicName of the searched bundle
-	 * @param version
-	 *            Version requested
-	 * @param listeners
-	 *            Zero or more download listener that will be notified of the
-	 *            outcome.
+	 * @param bsn Bundle-SymbolicName of the searched bundle
+	 * @param version Version requested
+	 * @param listeners Zero or more download listener that will be notified of
+	 *            the outcome.
 	 * @return A file to the revision or null if not found
-	 * @throws Exception
-	 *             when anything goes wrong, in this case no listeners will be
-	 *             called back.
+	 * @throws Exception when anything goes wrong, in this case no listeners
+	 *             will be called back.
 	 */
-	File get(String bsn, Version version, Map<String,String> properties, DownloadListener... listeners)
-			throws Exception;
+	File get(String bsn, Version version, Map<String, String> properties, DownloadListener... listeners)
+		throws Exception;
 
 	/**
 	 * Answer if this repository can be used to store files.
@@ -174,9 +186,10 @@ public interface RepositoryPlugin {
 	/**
 	 * Return a list of bsns that are present in the repository.
 	 * 
-	 * @param pattern
-	 *            A <ahref="https://en.wikipedia.org/wiki/Glob_%28programming%29">glob pattern</a>
-	 *            to be matched against bsns present in the repository, or {@code null}.
+	 * @param pattern A
+	 *            <ahref="https://en.wikipedia.org/wiki/Glob_%28programming%29">
+	 *            glob pattern</a> to be matched against bsns present in the
+	 *            repository, or {@code null}.
 	 * @return A list of bsns that match the pattern parameter or all if pattern
 	 *         is null; repositories that do not support browsing or querying
 	 *         should return an empty list.

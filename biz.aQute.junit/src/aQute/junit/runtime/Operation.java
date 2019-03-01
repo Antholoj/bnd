@@ -5,10 +5,8 @@ package aQute.junit.runtime;
  * a result of type <strong>R</strong>
  * 
  * @author Neil Bartlett
- * @param <S>
- *            The service type
- * @param <R>
- *            The result type
+ * @param <S> The service type
+ * @param <R> The result type
  */
 public interface Operation<S, R> {
 	R perform(S service) throws Exception;

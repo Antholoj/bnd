@@ -1,8 +1,8 @@
 package aQute.bnd.build.model.clauses;
 
-import org.osgi.framework.*;
+import org.osgi.framework.Constants;
 
-import aQute.bnd.header.*;
+import aQute.bnd.header.Attrs;
 
 public class VersionedClause extends HeaderClause implements Cloneable {
 	public VersionedClause(String name, Attrs attribs) {
@@ -23,5 +23,11 @@ public class VersionedClause extends HeaderClause implements Cloneable {
 		clone.name = this.name;
 		clone.attribs = new Attrs(this.attribs);
 		return clone;
+	}
+
+	public static VersionedClause error(String msg) {
+		Attrs a = new Attrs();
+		a.put("PARSE ERROR", msg);
+		return new VersionedClause("ERROR", a);
 	}
 }

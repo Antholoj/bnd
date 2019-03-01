@@ -1,0 +1,39 @@
+/*
+ *
+ */
+
+import aQute.bnd.gradle.TestOSGi
+
+plugins {
+    id 'biz.aQute.bnd.builder'
+}
+
+version = '1.0.0'
+
+repositories {
+    mavenLocal()
+    mavenCentral()
+}
+
+dependencies {
+    compile 'biz.aQute.bnd:biz.aQute.junit:+'
+    runtime 'org.eclipse.platform:org.eclipse.osgi:3.13.0'
+}
+
+task testosgiIgnoreFail(type: TestOSGi) {
+   description "OSGi Test ${name}.bndrun"
+   group 'test'
+   bndrun "${name}.bndrun"
+   ignoreFailures = true
+}
+
+task testosgiFail(type: TestOSGi) {
+   description "OSGi Test ${name}.bndrun"
+   group 'test'
+   bndrun "${name}.bndrun"
+   ignoreFailures = false
+}
+
+check {
+  dependsOn testosgiIgnoreFail, testosgiFail
+}

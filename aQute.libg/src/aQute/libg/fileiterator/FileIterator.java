@@ -1,7 +1,7 @@
 package aQute.libg.fileiterator;
 
-import java.io.*;
-import java.util.*;
+import java.io.File;
+import java.util.Iterator;
 
 public class FileIterator implements Iterator<File> {
 	File			dir;
@@ -13,12 +13,14 @@ public class FileIterator implements Iterator<File> {
 		this.dir = nxt;
 	}
 
+	@Override
 	public boolean hasNext() {
 		if (next != null)
 			return next.hasNext();
 		return n < dir.list().length;
 	}
 
+	@Override
 	public File next() {
 		if (next != null) {
 			File answer = next.next();
@@ -36,6 +38,7 @@ public class FileIterator implements Iterator<File> {
 			throw new IllegalStateException("File disappeared");
 	}
 
+	@Override
 	public void remove() {
 		throw new UnsupportedOperationException("Cannot remove from a file iterator");
 	}

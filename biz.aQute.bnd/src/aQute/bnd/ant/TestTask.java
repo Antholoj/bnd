@@ -1,18 +1,22 @@
 package aQute.bnd.ant;
 
-import java.io.*;
-import java.util.*;
+import java.io.File;
+import java.util.Collections;
+import java.util.LinkedList;
+import java.util.List;
+import java.util.StringTokenizer;
 
-import org.apache.tools.ant.*;
+import org.apache.tools.ant.BuildException;
 
-import aQute.bnd.build.*;
 import aQute.bnd.build.Project;
+import aQute.bnd.build.ProjectTester;
+import aQute.bnd.build.Workspace;
 
 public class TestTask extends BaseTask {
 
 	private boolean	continuous	= false;
 	private String	runFiles	= null;
-	private File dir = null;
+	private File	dir			= null;
 
 	@Override
 	public void execute() throws BuildException {
@@ -26,9 +30,10 @@ public class TestTask extends BaseTask {
 				projects = Collections.singletonList(baseProject);
 			} else {
 				StringTokenizer tokenizer = new StringTokenizer(runFiles, ",");
-				projects = new LinkedList<Project>();
+				projects = new LinkedList<>();
 				while (tokenizer.hasMoreTokens()) {
-					String runFilePath = tokenizer.nextToken().trim();
+					String runFilePath = tokenizer.nextToken()
+						.trim();
 					Project runProject;
 					if (".".equals(runFilePath)) {
 						runProject = baseProject;
@@ -36,7 +41,7 @@ public class TestTask extends BaseTask {
 						File runFile = new File(baseDir, runFilePath);
 						if (!runFile.isFile())
 							throw new BuildException(String.format("Run file %s does not exist (or is not a file).",
-									runFile.getAbsolutePath()));
+								runFile.getAbsolutePath()));
 						runProject = new Project(baseProject.getWorkspace(), baseDir, runFile);
 						runProject.setParent(baseProject);
 					}
@@ -44,24 +49,28 @@ public class TestTask extends BaseTask {
 				}
 			}
 
+			// Bnd #372: clear projects first, to ensure projects with multiple
+			// runfiles do not clear previous results...
+			for (Project project : projects) {
+				project.clear();
+			}
+
 			// Test them
 			for (Project project : projects) {
 				executeProject(project);
 			}
-		}
-		catch (Exception e) {
+		} catch (Exception e) {
 			e.printStackTrace();
 			throw new BuildException(e);
 		}
 	}
 
 	private void executeProject(Project project) throws Exception {
-		System.out.println("Testing " + project.getPropertiesFile());
-		project.clear();
 
 		ProjectTester tester = project.getProjectTester();
 		tester.setContinuous(continuous);
-		if (dir != null) tester.setCwd(dir);
+		if (dir != null)
+			tester.setCwd(dir);
 		tester.prepare();
 
 		if (report(project))
@@ -85,7 +94,7 @@ public class TestTask extends BaseTask {
 	public void setRunfiles(String runFiles) {
 		this.runFiles = runFiles;
 	}
-	
+
 	public void setDir(File dir) {
 		this.dir = dir;
 	}

@@ -1,24 +1,50 @@
 package aQute.bnd.main;
 
-import java.io.*;
-import java.util.*;
+import static java.nio.charset.StandardCharsets.UTF_8;
 
-import aQute.bnd.differ.*;
-import aQute.bnd.osgi.*;
-import aQute.bnd.service.diff.*;
-import aQute.configurable.*;
-import aQute.lib.getopt.*;
-import aQute.lib.tag.*;
+import java.io.File;
+import java.io.PrintWriter;
+import java.util.Collection;
+import java.util.Date;
+import java.util.List;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import aQute.bnd.build.Project;
+import aQute.bnd.build.ProjectBuilder;
+import aQute.bnd.differ.DiffPluginImpl;
+import aQute.bnd.osgi.Builder;
+import aQute.bnd.osgi.Constants;
+import aQute.bnd.osgi.Instructions;
+import aQute.bnd.osgi.Jar;
+import aQute.bnd.osgi.Processor;
+import aQute.bnd.service.diff.Delta;
+import aQute.bnd.service.diff.Diff;
+import aQute.bnd.service.diff.Differ;
+import aQute.bnd.service.diff.Tree;
+import aQute.configurable.Config;
+import aQute.lib.getopt.Arguments;
+import aQute.lib.getopt.Description;
+import aQute.lib.getopt.Options;
+import aQute.lib.io.IO;
+import aQute.lib.tag.Tag;
 
 public class DiffCommand {
-	bnd	bnd;
+	private final static Logger	logger	= LoggerFactory.getLogger(DiffCommand.class);
+	bnd							bnd;
 
 	DiffCommand(bnd bnd) {
 		this.bnd = bnd;
 	}
 
+	@Description("Compares two jars. Without specifying the JARs (and when there is a "
+		+ "current project) the jars of this project are diffed against their "
+		+ "baseline in the baseline repository, using the sub-builder's options (these can be overridden). "
+		+ "If one JAR is given, the tree is shown. Otherwise 2 JARs must be specified and they are "
+		+ "then compared to eachother.")
 	@Arguments(arg = {
-			"newer file", "[older file]"
+		"[newer file]", "[older file]"
 	})
 	interface diffOptions extends Options {
 		@Config(description = "Print the API")
@@ -39,42 +65,81 @@ public class DiffCommand {
 		@Config(description = "Where to send the output")
 		File output();
 
-		@Config(description = "Limit to these packages")
+		@Config(description = "Limit to these packages (can have wildcards)")
 		Collection<String> pack();
+
+		@Config(description = "Ignore headers")
+		Collection<String> ignore();
 	}
 
 	public void diff(diffOptions options) throws Exception {
+		DiffPluginImpl di = new DiffPluginImpl();
 
-		if (options._().size() == 1) {
-			bnd.trace("Show tree");
+		List<String> args = options._arguments();
+		if (args.size() == 0) {
+			Project project = bnd.getProject();
+			if (project != null) {
+				try (ProjectBuilder projectBuilder = project.getBuilder(null)) {
+					for (Builder b : projectBuilder.getSubBuilders()) {
+						ProjectBuilder pb = (ProjectBuilder) b;
+						Jar older = pb.getBaselineJar(); // make sure remains
+															// before
+						// disabling baselining
+						pb.setProperty(Constants.BASELINE, ""); // do not do
+						// baselining in
+						// build
+						Jar newer = pb.build();
+						di.setIgnore(pb.getProperty(Constants.DIFFIGNORE));
+						diff(options, di, newer, older);
+						bnd.getInfo(b);
+					}
+				}
+				bnd.getInfo(project);
+				return;
+			}
+
+		} else if (options._arguments()
+			.size() == 1) {
+			logger.debug("Show tree");
 			showTree(bnd, options);
 			return;
 		}
-		if (options._().size() != 2) {
+
+		if (options._arguments()
+			.size() != 2) {
 			throw new IllegalArgumentException("Requires 2 jar files input");
 		}
-		File fout = options.output();
+
+		Jar newer = bnd.getJar(args.get(0));
+		Jar older = bnd.getJar(args.get(1));
+		diff(options, di, newer, older);
+	}
+
+	private void diff(diffOptions options, DiffPluginImpl di, Jar newer, Jar older) throws Exception {
+		if (newer == null) {
+			bnd.error("No newer file specified");
+			return;
+		}
+
+		if (older == null) {
+			bnd.error("No older file specified");
+			return;
+		}
+
 		PrintWriter pw = null;
-		Jar newer = null;
-		Jar older = null;
 		try {
+			File fout = options.output();
+
 			if (fout == null)
-				pw = new PrintWriter(bnd.out);
+				pw = IO.writer(bnd.out);
 			else
-				pw = new PrintWriter(fout, "UTF-8");
+				pw = IO.writer(fout, UTF_8);
 
 			Instructions packageFilters = new Instructions(options.pack());
 
-			Iterator<String> it = options._().iterator();
-			newer = bnd.getJar(it.next());
-			if (newer == null)
-				return;
+			if (options.ignore() != null)
+				di.setIgnore(Processor.join(options.ignore()));
 
-			older = bnd.getJar(it.next());
-			if (older == null)
-				return;
-
-			Differ di = new DiffPluginImpl();
 			Tree n = di.tree(newer);
 			Tree o = di.tree(older);
 			Diff diff = n.diff(o);
@@ -82,7 +147,8 @@ public class DiffCommand {
 			boolean all = options.api() == false && options.resources() == false && options.manifest() == false;
 			if (!options.xml()) {
 				if (all || options.api())
-					for (Diff packageDiff : diff.get("<api>").getChildren()) {
+					for (Diff packageDiff : diff.get("<api>")
+						.getChildren()) {
 						if (packageFilters.matches(packageDiff.getName()))
 							show(pw, packageDiff, 0, !options.full());
 					}
@@ -102,11 +168,10 @@ public class DiffCommand {
 				if (all || options.resources())
 					tag.addContent(getTagFrom(diff.get("<resources>"), !options.full()));
 
-				pw.println("<?xml version='1.0'?>");
+				pw.print("<?xml version='1.0' encoding='UTF-8'?>\n");
 				tag.print(0, pw);
 			}
-		}
-		finally {
+		} finally {
 			if (older != null) {
 				older.close();
 			}
@@ -131,21 +196,22 @@ public class DiffCommand {
 		File fout = options.output();
 		PrintWriter pw;
 		if (fout == null)
-			pw = new PrintWriter(bnd.out);
+			pw = IO.writer(bnd.out);
 		else
-			pw = new PrintWriter(fout, "UTF-8");
+			pw = IO.writer(fout, UTF_8);
 
 		Instructions packageFilters = new Instructions(options.pack());
 
-		Jar newer = new Jar(bnd.getFile(options._().get(0)));
-		try {
+		try (Jar newer = new Jar(bnd.getFile(options._arguments()
+			.get(0)))) {
 			Differ di = new DiffPluginImpl();
 			Tree n = di.tree(newer);
 
 			boolean all = options.api() == false && options.resources() == false && options.manifest() == false;
 
 			if (all || options.api())
-				for (Tree packageDiff : n.get("<api>").getChildren()) {
+				for (Tree packageDiff : n.get("<api>")
+					.getChildren()) {
 					if (packageFilters.matches(packageDiff.getName()))
 						show(pw, packageDiff, 0);
 				}
@@ -153,10 +219,8 @@ public class DiffCommand {
 				show(pw, n.get("<manifest>"), 0);
 			if (all || options.resources())
 				show(pw, n.get("<resources>"), 0);
+		} finally {
 			pw.close();
-		}
-		finally {
-			newer.close();
 		}
 
 	}

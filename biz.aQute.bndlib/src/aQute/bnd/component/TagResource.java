@@ -1,26 +1,29 @@
 package aQute.bnd.component;
 
-import java.io.*;
+import static java.nio.charset.StandardCharsets.UTF_8;
 
-import aQute.bnd.osgi.*;
-import aQute.lib.tag.*;
+import java.io.IOException;
+import java.io.OutputStream;
+import java.io.PrintWriter;
+
+import aQute.bnd.osgi.WriteResource;
+import aQute.lib.io.IO;
+import aQute.lib.tag.Tag;
 
 public class TagResource extends WriteResource {
-	final Tag	tag;
+	final Tag tag;
 
 	public TagResource(Tag tag) {
 		this.tag = tag;
 	}
 
 	@Override
-	public void write(OutputStream out) throws UnsupportedEncodingException {
-		OutputStreamWriter ow = new OutputStreamWriter(out, "UTF-8");
-		PrintWriter pw = new PrintWriter(ow);
-		pw.println("<?xml version='1.1'?>");
+	public void write(OutputStream out) throws IOException {
+		PrintWriter pw = IO.writer(out, UTF_8);
+		pw.print("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
 		try {
 			tag.print(0, pw);
-		}
-		finally {
+		} finally {
 			pw.flush();
 		}
 	}

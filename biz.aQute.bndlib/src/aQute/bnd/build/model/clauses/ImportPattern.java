@@ -1,8 +1,8 @@
 package aQute.bnd.build.model.clauses;
 
-import org.osgi.framework.*;
+import org.osgi.framework.Constants;
 
-import aQute.bnd.header.*;
+import aQute.bnd.header.Attrs;
 
 public class ImportPattern extends VersionedClause implements Cloneable {
 
@@ -26,4 +26,10 @@ public class ImportPattern extends VersionedClause implements Cloneable {
 	public ImportPattern clone() {
 		return new ImportPattern(this.name, new Attrs(this.attribs));
 	}
+
+	public static ImportPattern error(String msg) {
+		Attrs a = new Attrs();
+		return new ImportPattern(msg, null);
+	}
+
 }

@@ -1,22 +1,24 @@
 package aQute.libg.classdump;
 
-import java.io.*;
-import java.lang.reflect.*;
+import java.io.DataInputStream;
+import java.io.File;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.PrintStream;
+import java.lang.reflect.Modifier;
+import java.nio.file.Paths;
+
+import aQute.lib.io.IO;
 
 public class ClassDumper {
 	/**
 	 * <pre>
-	 * ACC_PUBLIC 0x0001 Declared public; may be accessed from outside its
-	 * package. 
-	 * ACC_FINAL 0x0010 Declared final; no subclasses allowed.
+	 *  ACC_PUBLIC 0x0001 Declared public; may be accessed from outside its
+	 * package. ACC_FINAL 0x0010 Declared final; no subclasses allowed.
 	 * ACC_SUPER 0x0020 Treat superclass methods specially when invoked by the
-	 * invokespecial instruction. 
-	 * ACC_INTERFACE 0x0200 Is an interface, not a
-	 * class. 
-	 * ACC_ABSTRACT 0x0400 Declared abstract; may not be instantiated.
+	 * invokespecial instruction. ACC_INTERFACE 0x0200 Is an interface, not a
+	 * class. ACC_ABSTRACT 0x0400 Declared abstract; may not be instantiated.
 	 * </pre>
-	 * 
-	 * @param mod
 	 */
 	final static int	ACC_PUBLIC		= 0x0001;	// Declared public; may be
 													// accessed
@@ -56,7 +58,7 @@ public class ClassDumper {
 	InputStream			in;
 
 	public ClassDumper(String path) throws Exception {
-		this(path, new FileInputStream(new File(path)));
+		this(path, IO.stream(Paths.get(path)));
 	}
 
 	public ClassDumper(String path, InputStream in) throws IOException {
@@ -110,7 +112,7 @@ public class ClassDumper {
 
 				case 4 :
 					float f = in.readFloat();
-					pool[poolIndex] = new Float(f);
+					pool[poolIndex] = Float.valueOf(f);
 					ps.printf("%30d tag(4) float %s%n", poolIndex, f);
 					break;
 
@@ -126,7 +128,7 @@ public class ClassDumper {
 
 				case 6 :
 					double d = in.readDouble();
-					pool[poolIndex] = new Double(d);
+					pool[poolIndex] = Double.valueOf(d);
 					ps.printf("%30d tag(6) double %s%n", poolIndex, d);
 					poolIndex++;
 					break;
@@ -162,7 +164,7 @@ public class ClassDumper {
 					name_and_type_index = in.readUnsignedShort();
 					pool[poolIndex] = new Assoc((byte) 11, class_index, name_and_type_index);
 					ps.printf("%30d tag(11) interface and method ref %d/%d%n", poolIndex, class_index,
-							name_and_type_index);
+						name_and_type_index);
 					break;
 
 				// Name and Type
@@ -200,7 +202,7 @@ public class ClassDumper {
 			int name_index = in.readUnsignedShort();
 			int descriptor_index = in.readUnsignedShort();
 			ps.printf("%-30s %x %s(#%d) %s(#%d)%n", "field def", access, pool[name_index], name_index,
-					pool[descriptor_index], descriptor_index);
+				pool[descriptor_index], descriptor_index);
 			doAttributes(in, "  ");
 		}
 
@@ -212,7 +214,7 @@ public class ClassDumper {
 			int name_index = in.readUnsignedShort();
 			int descriptor_index = in.readUnsignedShort();
 			ps.printf("%-30s %x %s(#%d) %s(#%d)%n", "method def", access_flags, pool[name_index], name_index,
-					pool[descriptor_index], descriptor_index);
+				pool[descriptor_index], descriptor_index);
 			doAttributes(in, "  ");
 		}
 
@@ -224,8 +226,7 @@ public class ClassDumper {
 	/**
 	 * Called for each attribute in the class, field, or method.
 	 * 
-	 * @param in
-	 *            The stream
+	 * @param in The stream
 	 * @throws IOException
 	 */
 	private void doAttributes(DataInputStream in, String indent) throws IOException {
@@ -239,8 +240,7 @@ public class ClassDumper {
 	/**
 	 * Process a single attribute, if not recognized, skip it.
 	 * 
-	 * @param in
-	 *            the data stream
+	 * @param in the data stream
 	 * @throws IOException
 	 */
 	private void doAttribute(DataInputStream in, String indent) throws IOException {
@@ -284,11 +284,8 @@ public class ClassDumper {
 
 	/**
 	 * <pre>
-	 * Signature_attribute {
-	 * 	u2 attribute_name_index;
-	 * 	u4 attribute_length;
-	 * 	u2 signature_index;
-	 * 	}
+	 *  Signature_attribute { u2 attribute_name_index; u4 attribute_length;
+	 * u2 signature_index; }
 	 * </pre>
 	 * 
 	 * @param in
@@ -301,33 +298,25 @@ public class ClassDumper {
 
 	/**
 	 * <pre>
-	 * EnclosingMethod_attribute {
-	 * 	u2 attribute_name_index;
-	 * 	u4 attribute_length;
-	 * 	u2 class_index
-	 * 	u2 method_index;
-	 * 	}
-	 * 
+	 *  EnclosingMethod_attribute { u2 attribute_name_index; u4
+	 * attribute_length; u2 class_index u2 method_index; }
 	 * </pre>
 	 */
 	void doEnclosingMethod(DataInputStream in, String indent) throws IOException {
 		int class_index = in.readUnsignedShort();
 		int method_index = in.readUnsignedShort();
 		ps.printf("%-30s %s(#%d/c) %s%n", //
-				indent + "enclosing method", //
-				pool[((Integer) pool[class_index]).intValue()], //
-				class_index, //
-				(method_index == 0 ? "<>" : pool[method_index]));
+			indent + "enclosing method", //
+			pool[((Integer) pool[class_index]).intValue()], //
+			class_index, //
+			(method_index == 0 ? "<>" : pool[method_index]));
 	}
 
 	/**
 	 * <pre>
-	 *  Exceptions_attribute {
-	 * 		u2 attribute_name_index;
-	 * 		u4 attribute_length;
-	 * 		u2 number_of_exceptions;
-	 * 		u2 exception_index_table[number_of_exceptions];
-	 * 	}
+	 *  Exceptions_attribute { u2 attribute_name_index; u4
+	 * attribute_length; u2 number_of_exceptions; u2
+	 * exception_index_table[number_of_exceptions]; }
 	 * </pre>
 	 * 
 	 * @param in
@@ -352,22 +341,11 @@ public class ClassDumper {
 
 	/**
 	 * <pre>
-	 * Code_attribute {
-	 * 		u2 attribute_name_index;
-	 * 		u4 attribute_length;
-	 * 		u2 max_stack;
-	 * 		u2 max_locals;
-	 * 		u4 code_length;
-	 * 		u1 code[code_length];
-	 * 		u2 exception_table_length;
-	 * 		{    	u2 start_pc;
-	 * 		      	u2 end_pc;
-	 * 		      	u2  handler_pc;
-	 * 		      	u2  catch_type;
-	 * 		}	exception_table[exception_table_length];
-	 * 		u2 attributes_count;
-	 * 		attribute_info attributes[attributes_count];
-	 * 	}
+	 *  Code_attribute { u2 attribute_name_index; u4 attribute_length; u2
+	 * max_stack; u2 max_locals; u4 code_length; u1 code[code_length]; u2
+	 * exception_table_length; { u2 start_pc; u2 end_pc; u2 handler_pc; u2
+	 * catch_type; } exception_table[exception_table_length]; u2
+	 * attributes_count; attribute_info attributes[attributes_count]; }
 	 * </pre>
 	 * 
 	 * @param in
@@ -407,7 +385,8 @@ public class ClassDumper {
 		while (index < code.length) {
 			StringBuilder sb = new StringBuilder();
 			for (int i = 0; i < 16 && index < code.length; i++) {
-				String s = Integer.toHexString((0xFF & code[index++])).toUpperCase();
+				String s = Integer.toHexString((0xFF & code[index++]))
+					.toUpperCase();
 				if (s.length() == 1)
 					sb.append("0");
 				sb.append(s);
@@ -456,19 +435,20 @@ public class ClassDumper {
 			case 's' :
 				int const_value_index = in.readUnsignedShort();
 				ps.printf("%-30s %c %s(#%d)%n", indent + "element value", tag, pool[const_value_index],
-						const_value_index);
+					const_value_index);
 				break;
 
 			case 'e' :
 				int type_name_index = in.readUnsignedShort();
 				int const_name_index = in.readUnsignedShort();
 				ps.printf("%-30s %c %s(#%d) %s(#%d)%n", indent + "type+const", tag, pool[type_name_index],
-						type_name_index, pool[const_name_index], const_name_index);
+					type_name_index, pool[const_name_index], const_name_index);
 				break;
 
 			case 'c' :
 				int class_info_index = in.readUnsignedShort();
-				ps.printf("%-30s %c %s(#%d)%n", indent + "element value", tag, pool[class_info_index], class_info_index);
+				ps.printf("%-30s %c %s(#%d)%n", indent + "element value", tag, pool[class_info_index],
+					class_info_index);
 				break;
 
 			case '@' :
@@ -491,15 +471,9 @@ public class ClassDumper {
 
 	/**
 	 * <pre>
-	 *  LineNumberTable_attribute {
-	 * 		u2 attribute_name_index;
-	 * 		u4 attribute_length;
-	 * 		u2 line_number_table_length;
-	 * 		{  u2 start_pc;	     
-	 * 		   u2 line_number;	     
-	 * 		} line_number_table[line_number_table_length];
-	 * 	}
-	 * 
+	 *  LineNumberTable_attribute { u2 attribute_name_index; u4
+	 * attribute_length; u2 line_number_table_length; { u2 start_pc; u2
+	 * line_number; } line_number_table[line_number_table_length]; }
 	 * </pre>
 	 */
 	void doLineNumberTable(DataInputStream in, String indent) throws IOException {
@@ -519,17 +493,10 @@ public class ClassDumper {
 
 	/**
 	 * <pre>
-	 * 	LocalVariableTable_attribute {
-	 * 		u2 attribute_name_index;
-	 * 		u4 attribute_length;
-	 * 		u2 local_variable_table_length;
-	 * 		{  u2 start_pc;
-	 * 		    u2 length;
-	 * 		    u2 name_index;
-	 * 		    u2 descriptor_index;
-	 * 		    u2 index;
-	 * 		} local_variable_table[local_variable_table_length];
-	 * 	}
+	 *  LocalVariableTable_attribute { u2 attribute_name_index; u4
+	 * attribute_length; u2 local_variable_table_length; { u2 start_pc; u2
+	 * length; u2 name_index; u2 descriptor_index; u2 index; }
+	 * local_variable_table[local_variable_table_length]; }
 	 * </pre>
 	 */
 
@@ -543,22 +510,16 @@ public class ClassDumper {
 			int descriptor_index = in.readUnsignedShort();
 			int index = in.readUnsignedShort();
 			ps.printf("%-30s %d: %d/%d %s(#%d) %s(#%d)%n", indent, index, start_pc, length, pool[name_index],
-					name_index, pool[descriptor_index], descriptor_index);
+				name_index, pool[descriptor_index], descriptor_index);
 		}
 	}
 
 	/**
 	 * <pre>
-	 *    InnerClasses_attribute {
-	 * 		u2 attribute_name_index;
-	 * 		u4 attribute_length;
-	 * 		u2 number_of_classes;
-	 * 		{  u2 inner_class_info_index;	     
-	 * 		   u2 outer_class_info_index;	     
-	 * 		   u2 inner_name_index;	     
-	 * 		   u2 inner_class_access_flags;	     
-	 * 		} classes[number_of_classes];
-	 * 	}
+	 *  InnerClasses_attribute { u2 attribute_name_index; u4
+	 * attribute_length; u2 number_of_classes; { u2 inner_class_info_index; u2
+	 * outer_class_info_index; u2 inner_name_index; u2 inner_class_access_flags;
+	 * } classes[number_of_classes]; }
 	 * </pre>
 	 */
 	void doInnerClasses(DataInputStream in, String indent) throws IOException {
@@ -580,7 +541,7 @@ public class ClassDumper {
 				oname = (String) pool[((Integer) pool[outer_class_info_index]).intValue()];
 
 			ps.printf("%-30s %d: %x %s(#%d/c) %s(#%d/c) %s(#%d) %n", indent, i, inner_class_access_flags, iname,
-					inner_class_info_index, oname, outer_class_info_index, pool[inner_name_index], inner_name_index);
+				inner_class_info_index, oname, outer_class_info_index, pool[inner_name_index], inner_name_index);
 		}
 	}
 

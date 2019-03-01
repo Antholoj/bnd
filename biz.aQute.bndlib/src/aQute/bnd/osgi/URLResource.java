@@ -1,85 +1,150 @@
 package aQute.bnd.osgi;
 
-import java.io.*;
-import java.net.*;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.net.JarURLConnection;
+import java.net.MalformedURLException;
+import java.net.URL;
+import java.net.URLConnection;
+import java.nio.ByteBuffer;
+import java.util.jar.JarFile;
 
-import aQute.lib.io.*;
+import aQute.bnd.http.HttpClient;
+import aQute.bnd.service.url.TaggedData;
+import aQute.lib.io.IO;
 
-public class URLResource implements Resource {
-	URL		url;
-	String	extra;
-	long	size	= -1;
+class URLResource implements Resource {
+	private static final ByteBuffer	CLOSED			= ByteBuffer.allocate(0);
+	private ByteBuffer				buffer;
+	private final URL				url;
+	private final HttpClient		client;
+	private String					extra;
+	private long					lastModified	= -1L;
+	private int						size			= -1;
 
-	public URLResource(URL url) {
+	/**
+	 * This constructor is not for use other than by
+	 * {@link Resource#fromURL(URL)}.
+	 * 
+	 * @see Resource#fromURL(URL)
+	 */
+	URLResource(URL url, HttpClient client) {
 		this.url = url;
+		this.client = client;
 	}
 
-	public InputStream openInputStream() throws IOException {
-		return url.openStream();
+	@Override
+	public ByteBuffer buffer() throws Exception {
+		return getBuffer().duplicate();
+	}
+
+	private ByteBuffer getBuffer() throws Exception {
+		if (buffer != null) {
+			return buffer;
+		}
+		InputStream in = open();
+		if (size == -1) {
+			return buffer = ByteBuffer.wrap(IO.read(in));
+		}
+		ByteBuffer bb = IO.copy(in, ByteBuffer.allocate(size));
+		bb.flip();
+		return buffer = bb;
+	}
+
+	private InputStream open() throws Exception {
+		URLConnection conn;
+		InputStream in;
+		if (client != null) {
+			TaggedData tag = client.connectTagged(url);
+			conn = tag.getConnection();
+			in = tag.getInputStream();
+		} else {
+			conn = url.openConnection();
+			conn.connect();
+			in = conn.getInputStream();
+		}
+		lastModified = conn.getLastModified();
+		int length = conn.getContentLength();
+		if (length != -1) {
+			size = length;
+		}
+		return in;
+	}
+
+	@Override
+	public InputStream openInputStream() throws Exception {
+		return IO.stream(buffer());
 	}
 
 	@Override
 	public String toString() {
-		return ":" + url.getPath() + ":";
+		return ":" + url.toExternalForm() + ":";
 	}
 
+	@Override
 	public void write(OutputStream out) throws Exception {
-		IO.copy(this.openInputStream(), out);
+		if (buffer != null) {
+			IO.copy(buffer(), out);
+		} else {
+			IO.copy(open(), out);
+		}
 	}
 
+	@Override
 	public long lastModified() {
-		return -1;
+		if (lastModified >= 0L) {
+			return lastModified;
+		}
+		try {
+			getBuffer();
+		} catch (Exception e) {
+			lastModified = 0L;
+		}
+		return lastModified;
 	}
 
+	@Override
 	public String getExtra() {
 		return extra;
 	}
 
+	@Override
 	public void setExtra(String extra) {
 		this.extra = extra;
 	}
 
+	@Override
 	public long size() throws Exception {
-		if (size >= 0)
+		if (size >= 0) {
 			return size;
-
-		try {
-			if (url.getProtocol().equals("file:")) {
-				File file = new File(url.getPath());
-				if (file.isFile())
-					return size = file.length();
-			} else {
-				URLConnection con = url.openConnection();
-				if (con instanceof HttpURLConnection) {
-					HttpURLConnection http = (HttpURLConnection) con;
-					http.setRequestMethod("HEAD");
-					http.connect();
-					String l = http.getHeaderField("Content-Length");
-					if (l != null) {
-						return size = Long.parseLong(l);
-					}
-				}
-			}
 		}
-		catch (Exception e) {
-			// Forget this exception, we do it the hard way
-		}
-		InputStream in = openInputStream();
-		DataInputStream din = null;
-		try {
-			din = new DataInputStream(in);
-			long result = din.skipBytes(Integer.MAX_VALUE);
-			while (in.read() >= 0) {
-				result += din.skipBytes(Integer.MAX_VALUE);
-			}
-			size = result;
-		}
-		finally {
-			if (din != null) {
-				din.close();
-			}
-		}
-		return size;
+		return size = getBuffer().limit();
 	}
 
+	@Override
+	public void close() throws IOException {
+		/*
+		 * Allow original buffer to be garbage collected and prevent it being
+		 * remapped for this URLResouce.
+		 */
+		buffer = CLOSED;
+	}
+
+	/**
+	 * Use JarURLConnection to parse jar: URL into URL to jar URL and entry.
+	 */
+	static class JarURLUtil extends JarURLConnection {
+		JarURLUtil(URL url) throws MalformedURLException {
+			super(url);
+		}
+
+		@Override
+		public JarFile getJarFile() throws IOException {
+			return null;
+		}
+
+		@Override
+		public void connect() throws IOException {}
+	}
 }

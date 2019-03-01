@@ -1,12 +1,17 @@
 package aQute.bnd.build;
 
-import java.io.*;
-import java.util.*;
+import java.io.File;
+import java.util.List;
+import java.util.SortedMap;
 
-import aQute.bnd.service.*;
-import aQute.bnd.version.*;
-import aQute.service.reporter.*;
+import org.osgi.annotation.versioning.ProviderType;
 
+import aQute.bnd.service.RepositoryPlugin;
+import aQute.bnd.service.Strategy;
+import aQute.bnd.version.Version;
+import aQute.service.reporter.Messages;
+
+@ProviderType
 public interface ProjectMessages extends Messages {
 
 	ERROR InvalidStrategy(String help, String[] args);
@@ -21,7 +26,7 @@ public interface ProjectMessages extends Messages {
 
 	ERROR MissingPom();
 
-	ERROR FoundVersions_ForStrategy_ButNoProvider(SortedMap<Version,RepositoryPlugin> versions, Strategy useStrategy);
+	ERROR FoundVersions_ForStrategy_ButNoProvider(SortedMap<Version, RepositoryPlugin> versions, Strategy useStrategy);
 
 	ERROR NoSuchProject(String bsn, String spec);
 

@@ -1,11 +1,11 @@
 package aQute.libg.cryptography;
 
-import java.util.*;
+import java.util.Arrays;
 
-import aQute.lib.hex.*;
+import aQute.lib.hex.Hex;
 
 public abstract class Digest {
-	final byte[]	digest;
+	final byte[] digest;
 
 	protected Digest(byte[] checksum, int width) {
 		this.digest = checksum;

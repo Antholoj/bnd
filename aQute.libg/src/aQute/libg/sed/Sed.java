@@ -1,10 +1,17 @@
 package aQute.libg.sed;
 
-import java.io.*;
-import java.util.*;
-import java.util.regex.*;
+import static java.nio.charset.StandardCharsets.UTF_8;
 
-import aQute.lib.io.*;
+import java.io.BufferedReader;
+import java.io.File;
+import java.io.IOException;
+import java.io.PrintWriter;
+import java.util.LinkedHashMap;
+import java.util.Map;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
+import aQute.lib.io.IO;
 
 public class Sed {
 	final File					file;
@@ -12,7 +19,7 @@ public class Sed {
 	File						output;
 	boolean						backup			= true;
 
-	final Map<Pattern,String>	replacements	= new LinkedHashMap<Pattern,String>();
+	final Map<Pattern, String>	replacements	= new LinkedHashMap<>();
 
 	public Sed(Replacer macro, File file) {
 		assert file.isFile();
@@ -36,39 +43,40 @@ public class Sed {
 
 	public int doIt() throws IOException {
 		int actions = 0;
-		BufferedReader brdr = new BufferedReader(new InputStreamReader(new FileInputStream(file), "UTF-8"));
 		File out;
 		if (output != null)
 			out = output;
 		else
 			out = new File(file.getAbsolutePath() + ".tmp");
-		PrintWriter pw = new PrintWriter(new OutputStreamWriter(new FileOutputStream(out), "UTF-8"));
-		try {
+		try (BufferedReader brdr = IO.reader(file, UTF_8); //
+			PrintWriter pw = IO.writer(out, UTF_8)) {
 			String line;
 			while ((line = brdr.readLine()) != null) {
 				for (Pattern p : replacements.keySet()) {
-					String replace = replacements.get(p);
-					Matcher m = p.matcher(line);
+					try {
+						String replace = replacements.get(p);
+						Matcher m = p.matcher(line);
 
-					StringBuffer sb = new StringBuffer();
-					while (m.find()) {
-						String tmp = setReferences(m, replace);
-						if (macro != null)
-							tmp = Matcher.quoteReplacement(macro.process(tmp));
-						m.appendReplacement(sb, tmp);
-						actions++;
+						StringBuffer sb = new StringBuffer();
+						while (m.find()) {
+							String tmp = setReferences(m, replace);
+							if (macro != null)
+								tmp = Matcher.quoteReplacement(macro.process(tmp));
+							m.appendReplacement(sb, tmp);
+							actions++;
+						}
+						m.appendTail(sb);
+
+						line = sb.toString();
+					} catch (Exception e) {
+						throw new IOException("where: " + line + ", pattern: " + p.pattern() + ": " + e, e);
 					}
-					m.appendTail(sb);
-
-					line = sb.toString();
 				}
-				pw.println(line);
+				pw.print(line);
+				pw.print('\n');
 			}
-        } finally {
-        	brdr.close();
-			pw.close();
-        }
-        
+		}
+
 		if (output == null) {
 			if (backup) {
 				File bak = new File(file.getAbsolutePath() + ".bak");
@@ -76,10 +84,10 @@ public class Sed {
 			}
 			IO.rename(out, file);
 		}
-        
+
 		return actions;
 	}
-    
+
 	private String setReferences(Matcher m, String replace) {
 		StringBuilder sb = new StringBuilder();
 		for (int i = 0; i < replace.length(); i++) {

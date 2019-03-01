@@ -1,16 +1,18 @@
 package aQute.lib.index;
 
-import java.io.*;
-import java.nio.*;
-import java.nio.channels.*;
+import java.io.File;
+import java.io.IOException;
+import java.io.RandomAccessFile;
+import java.nio.ByteBuffer;
+import java.nio.MappedByteBuffer;
+import java.nio.channels.FileChannel;
 import java.nio.channels.FileChannel.MapMode;
-import java.util.*;
+import java.util.Iterator;
+import java.util.LinkedHashMap;
 
 /**
  * <pre>
- *   0   ->   0, 122   -> 1
- *   123 -> 123, 244   -> 2
- *   245 -> 245, ...
+ *  0 -> 0, 122 -> 1 123 -> 123, 244 -> 2 245 -> 245, ...
  * </pre>
  */
 public class Index implements Iterable<byte[]> {
@@ -21,13 +23,13 @@ public class Index implements Iterable<byte[]> {
 	final static int					MAGIC		= 0x494C4458;
 	final static int					KEYSIZE		= 4;
 
-	FileChannel					file;
+	FileChannel							file;
 	final int							pageSize	= 4096;
 	final int							keySize;
 	final int							valueSize	= 8;
 	final int							capacity;
 	public Page							root;
-	final LinkedHashMap<Integer,Page>	cache		= new LinkedHashMap<Integer,Index.Page>();
+	final LinkedHashMap<Integer, Page>	cache		= new LinkedHashMap<>();
 	final MappedByteBuffer				settings;
 
 	private int							nextPage;
@@ -62,6 +64,7 @@ public class Index implements Iterable<byte[]> {
 				Iterator<byte[]>	i;
 				int					rover	= 0;
 
+				@Override
 				public byte[] next() {
 					if (leaf) {
 						return k(rover++);
@@ -70,6 +73,7 @@ public class Index implements Iterable<byte[]> {
 					return i.next();
 				}
 
+				@Override
 				public boolean hasNext() {
 					try {
 						if (leaf)
@@ -79,13 +83,13 @@ public class Index implements Iterable<byte[]> {
 							i = getPage(c).iterator();
 						}
 						return i.hasNext();
-					}
-					catch (IOException e) {
+					} catch (IOException e) {
 						throw new RuntimeException(e);
 					}
 
 				}
 
+				@Override
 				public void remove() {
 					throw new UnsupportedOperationException();
 				}
@@ -246,8 +250,7 @@ public class Index implements Iterable<byte[]> {
 			StringBuilder sb = new StringBuilder();
 			try {
 				toString(sb, "");
-			}
-			catch (IOException e) {
+			} catch (IOException e) {
 				e.printStackTrace();
 			}
 			return sb.toString();
@@ -255,8 +258,8 @@ public class Index implements Iterable<byte[]> {
 
 		public void toString(StringBuilder sb, String indent) throws IOException {
 			for (int i = 0; i < n; i++) {
-				sb.append(String.format("%s %02d:%02d %20s %s %d%n", indent, number, i, hex(k(i), 0, 4), leaf ? "=="
-						: "->", c(i)));
+				sb.append(String.format("%s %02d:%02d %20s %s %d%n", indent, number, i, hex(k(i), 0, 4),
+					leaf ? "==" : "->", c(i)));
 				if (!leaf) {
 					long c = c(i);
 					Page sub = getPage((int) c);
@@ -286,29 +289,35 @@ public class Index implements Iterable<byte[]> {
 
 	public Index(File file, int keySize) throws IOException {
 		capacity = (pageSize - Page.START_OFFSET) / (keySize + valueSize);
-		RandomAccessFile raf = new RandomAccessFile(file, "rw");
-		this.file = raf.getChannel();
-		settings = this.file.map(MapMode.READ_WRITE, 0, pageSize);
-		if (this.file.size() == pageSize) {
-			this.keySize = keySize;
-			settings.putInt(SIGNATURE, MAGIC);
-			settings.putInt(KEYSIZE, keySize);
-			nextPage = 1;
-			root = allocate(true);
-			root.n = 1;
-			root.set(0, new byte[KEYSIZE], 0);
-			root.write();
-		} else {
-			if (settings.getInt(SIGNATURE) != MAGIC)
-				throw new IllegalStateException("No Index file, magic is not " + MAGIC);
 
-			this.keySize = settings.getInt(KEYSIZE);
-			if (keySize != 0 && this.keySize != keySize)
-				throw new IllegalStateException("Invalid key size for Index file. The file is " + this.keySize
+		@SuppressWarnings("resource")
+		RandomAccessFile raf = new RandomAccessFile(file, "rw");
+		try {
+			this.file = raf.getChannel();
+			settings = this.file.map(MapMode.READ_WRITE, 0, pageSize);
+			if (this.file.size() == pageSize) {
+				this.keySize = keySize;
+				settings.putInt(SIGNATURE, MAGIC);
+				settings.putInt(KEYSIZE, keySize);
+				nextPage = 1;
+				root = allocate(true);
+				root.n = 1;
+				root.set(0, new byte[KEYSIZE], 0);
+				root.write();
+			} else {
+				if (settings.getInt(SIGNATURE) != MAGIC)
+					throw new IllegalStateException("No Index file, magic is not " + MAGIC);
+
+				this.keySize = settings.getInt(KEYSIZE);
+				if (keySize != 0 && this.keySize != keySize)
+					throw new IllegalStateException("Invalid key size for Index file. The file is " + this.keySize
 						+ " and was expected to be " + this.keySize);
 
-			root = getPage(1);
-			nextPage = (int) (this.file.size() / pageSize);
+				root = getPage(1);
+				nextPage = (int) (this.file.size() / pageSize);
+			}
+		} finally {
+			// raf.close();
 		}
 	}
 
@@ -345,6 +354,7 @@ public class Index implements Iterable<byte[]> {
 		cache.clear();
 	}
 
+	@Override
 	public Iterator<byte[]> iterator() {
 		return root.iterator();
 	}

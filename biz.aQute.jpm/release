@@ -1,1 +1,0 @@
-${system;git log -50 --oneline}

@@ -1,0 +1,39 @@
+# these really need to always be in defaults.bnd
+src:          src
+bin:          bin
+testsrc:      test
+testbin:      bin_test
+target-dir:   generated
+
+
+# General Options
+project.dependson       = ${p-dependson;\\${pathseparator}}
+project.bootclasspath   = ${p-bootclasspath;\\${pathseparator}}
+project.buildpath       = ${p-buildpath;\\${pathseparator}}
+project.sourcepath      = ${p-sourcepath;\\${pathseparator}}
+project.allsourcepath   = ${p-allsourcepath;\\${pathseparator}}
+project.output          = ${p-output}
+project.testpath        = ${p-testpath;\\${pathseparator}}
+
+-verbose:     false
+project:      ${basedir}
+target:       ${project}/${target-dir}
+build:        ${workspace}/cnf
+p:            ${basename;${project}}
+project.name: ${p}
+plugin-dir:   ${build}/plugins
+
+
+# Java Compiler Options
+java:         java
+javac:        javac
+javac.source: ${def;java.specification.version;1.8}
+javac.target: ${def;java.specification.version;1.8}
+javac.profile:
+javac.debug:  on
+
+# Bnd Options
+-sources:       true
+-sourcepath:    ${project}/${src}
+-outputmask:	${@bsn}.jar
+-groupid:		${basename;${workspace}}

@@ -1,25 +1,30 @@
 package aQute.bnd.maven.support;
 
-import java.io.*;
-import java.net.*;
-import java.util.*;
-import java.util.concurrent.*;
-import java.util.regex.*;
+import java.io.File;
+import java.net.URI;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.Executor;
+import java.util.concurrent.Executors;
+import java.util.regex.Pattern;
+
+import aQute.lib.io.IO;
 
 /*
  http://repository.springsource.com/maven/bundles/external/org/apache/coyote/com.springsource.org.apache.coyote/6.0.24/com.springsource.org.apache.coyote-6.0.24.pom
  http://repository.springsource.com/maven/bundles/external/org/apache/coyote/com.springsource.org.apache.coyote/6.0.24/com.springsource.org.apache.coyote-6.0.24.pom
  */
 public class Maven {
-	final File						userHome	= new File(System.getProperty("user.home"));
-	final Map<String,MavenEntry>	entries		= new ConcurrentHashMap<String,MavenEntry>();
-	final static String[]			ALGORITHMS	= {
-			"md5", "sha1"
-												};
-	boolean							usecache	= false;
+
+	final Map<String, MavenEntry>	entries				= new ConcurrentHashMap<>();
+	final static String[]			ALGORITHMS			= {
+		"md5", "sha1"
+	};
+	boolean							usecache			= false;
 	final Executor					executor;
-	File							m2			= new File(userHome, ".m2");
-	File							repository	= new File(m2, "repository");
+	static final String				MAVEN_REPO_LOCAL	= System.getProperty("maven.repo.local", "~/.m2/repository");
+
+	File							repository			= IO.getFile(MAVEN_REPO_LOCAL);
 
 	public Maven(Executor executor) {
 		if (executor == null)
@@ -28,9 +33,9 @@ public class Maven {
 			this.executor = executor;
 	}
 
-	// http://repo1.maven.org/maven2/junit/junit/maven-metadata.xml
+	// https://repo.maven.apache.org/maven2/junit/junit/maven-metadata.xml
 
-	static Pattern	MAVEN_RANGE	= Pattern.compile("(\\[|\\()(.+)(,(.+))(\\]|\\))");
+	static Pattern MAVEN_RANGE = Pattern.compile("(\\[|\\()(.+)(,(.+))(\\]|\\))");
 
 	public CachedPom getPom(String groupId, String artifactId, String version, URI... extra) throws Exception {
 		MavenEntry entry = getEntry(groupId, artifactId, version);
@@ -41,12 +46,10 @@ public class Maven {
 	 * @param groupId
 	 * @param artifactId
 	 * @param version
-	 * @param extra
-	 * @return
 	 * @throws Exception
 	 */
 	public MavenEntry getEntry(String groupId, String artifactId, String version) throws Exception {
-		String path = path(groupId, artifactId, version);
+		String path = dirpath(groupId, artifactId, version);
 
 		MavenEntry entry;
 		synchronized (entries) {
@@ -60,7 +63,7 @@ public class Maven {
 		return entry;
 	}
 
-	private String path(String groupId, String artifactId, String version) {
+	private String dirpath(String groupId, String artifactId, String version) {
 		return groupId.replace('.', '/') + '/' + artifactId + '/' + version + "/" + artifactId + "-" + version;
 	}
 
@@ -82,8 +85,11 @@ public class Maven {
 	}
 
 	public void setM2(File dir) {
-		this.m2 = dir;
 		this.repository = new File(dir, "repository");
 	}
 
+	@Override
+	public String toString() {
+		return "Maven [" + (repository != null ? "m2=" + repository : "") + "]";
+	}
 }

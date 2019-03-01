@@ -1,75 +1,56 @@
 package aQute.bnd.osgi;
 
-import java.io.*;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.nio.ByteBuffer;
+
+import aQute.lib.io.ByteBufferOutputStream;
+import aQute.lib.io.IO;
 
 public abstract class WriteResource implements Resource {
-	String			extra;
-	volatile long	size	= -1;
+	private ByteBuffer	buffer;
+	private String		extra;
 
-	public InputStream openInputStream() throws Exception {
-		PipedInputStream pin = new PipedInputStream();
-		final PipedOutputStream pout = new PipedOutputStream(pin);
-		Thread t = new Thread() {
-			@Override
-			public void run() {
-				try {
-					write(pout);
-					pout.flush();
-				}
-				catch (Exception e) {
-					e.printStackTrace();
-				}
-				finally {
-					try {
-						pout.close();
-					}
-					catch (IOException e) {
-						// Ignore
-					}
-				}
-			}
-		};
-		t.start();
-		return pin;
+	@Override
+	public ByteBuffer buffer() throws Exception {
+		return getBuffer().duplicate();
 	}
 
-	public abstract void write(OutputStream out) throws IOException, Exception;
+	private ByteBuffer getBuffer() throws Exception {
+		if (buffer != null) {
+			return buffer;
+		}
+		ByteBufferOutputStream out = new ByteBufferOutputStream();
+		write(out);
+		return buffer = out.toByteBuffer();
+	}
 
+	@Override
+	public InputStream openInputStream() throws Exception {
+		return IO.stream(buffer());
+	}
+
+	@Override
+	public abstract void write(OutputStream out) throws Exception;
+
+	@Override
 	public abstract long lastModified();
 
+	@Override
 	public String getExtra() {
 		return extra;
 	}
 
+	@Override
 	public void setExtra(String extra) {
 		this.extra = extra;
 	}
 
-	static class CountingOutputStream extends OutputStream {
-		long	size;
-
-		@Override
-		public void write(int var0) throws IOException {
-			size++;
-		}
-
-		@Override
-		public void write(byte[] buffer) throws IOException {
-			size += buffer.length;
-		}
-
-		@Override
-		public void write(byte[] buffer, int start, int length) throws IOException {
-			size += length;
-		}
+	@Override
+	public long size() throws Exception {
+		return getBuffer().limit();
 	}
 
-	public long size() throws IOException, Exception {
-		if (size == -1) {
-			CountingOutputStream cout = new CountingOutputStream();
-			write(cout);
-			size = cout.size;
-		}
-		return size;
-	}
+	@Override
+	public void close() {}
 }

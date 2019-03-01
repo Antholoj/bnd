@@ -1,11 +1,20 @@
 package aQute.libg.asn1;
 
-import java.io.*;
-import java.text.*;
-import java.util.*;
+import static java.nio.charset.StandardCharsets.UTF_8;
+
+import java.io.DataInputStream;
+import java.io.EOFException;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.io.PrintStream;
+import java.io.UnsupportedEncodingException;
+import java.text.DateFormat;
+import java.text.SimpleDateFormat;
+import java.util.Date;
 
 public class BER implements Types {
-	DateFormat				df	= new SimpleDateFormat("yyyyMMddHHmmss\\Z");
+	final static DateFormat	df	= new SimpleDateFormat("yyyyMMddHHmmss\\Z");
 
 	final DataInputStream	xin;
 	long					position;
@@ -64,7 +73,7 @@ public class BER implements Types {
 				case UNIVERSAL_STRING :
 				case PRINTABLE_STRING :
 				case UTCTIME :
-					summary = new String(data, "UTF-8");
+					summary = new String(data, UTF_8);
 					break;
 
 				case OBJECT_IDENTIFIER :
@@ -161,8 +170,6 @@ public class BER implements Types {
 	 * tag is universal class, whose form is primitive, whose number of the tag
 	 * is zero, and whose contents are absent, thus: End-of-contents Length
 	 * Contents 0016 0016 Absent
-	 * 
-	 * @return
 	 */
 	private long readLength() throws IOException {
 		long n = readByte();
@@ -236,7 +243,7 @@ public class BER implements Types {
 
 			case UTF8_STRING :
 				String s = pdu.getString();
-				byte[] encoded = s.getBytes("UTF-8");
+				byte[] encoded = s.getBytes(UTF_8);
 				return encoded.length;
 
 			case IA5STRING :
@@ -379,7 +386,7 @@ public class BER implements Types {
 				int unused = bytes[0];
 				assert unused <= 7;
 				int[] mask = {
-						0xFF, 0x7F, 0x3F, 0x1F, 0xF, 0x7, 0x3, 0x1
+					0xFF, 0x7F, 0x3F, 0x1F, 0xF, 0x7, 0x3, 0x1
 				};
 				bytes[bytes.length - 1] &= (byte) mask[unused];
 				out.write(bytes);
@@ -426,7 +433,7 @@ public class BER implements Types {
 
 			case UTF8_STRING : {
 				String s = pdu.getString();
-				byte[] data = s.getBytes("UTF-8");
+				byte[] data = s.getBytes(UTF_8);
 				out.write(data);
 				break;
 			}
@@ -449,9 +456,11 @@ public class BER implements Types {
 			case UTCTIME :
 			case GENERALIZED_TIME :
 				Date date = pdu.getDate();
-				String ss = df.format(date);
-				byte d[] = ss.getBytes("ASCII");
-				out.write(d);
+				synchronized (df) {
+					String ss = df.format(date);
+					byte d[] = ss.getBytes("ASCII");
+					out.write(d);
+				}
 				break;
 
 		}

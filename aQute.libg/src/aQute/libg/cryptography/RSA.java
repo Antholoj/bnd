@@ -1,11 +1,17 @@
 package aQute.libg.cryptography;
 
-import java.math.*;
-import java.security.*;
-import java.security.interfaces.*;
-import java.security.spec.*;
+import java.math.BigInteger;
+import java.security.KeyFactory;
+import java.security.KeyPair;
+import java.security.KeyPairGenerator;
+import java.security.NoSuchAlgorithmException;
+import java.security.interfaces.RSAPrivateKey;
+import java.security.interfaces.RSAPublicKey;
+import java.security.spec.InvalidKeySpecException;
+import java.security.spec.RSAPrivateKeySpec;
+import java.security.spec.RSAPublicKeySpec;
 
-import aQute.libg.tuple.*;
+import aQute.libg.tuple.Pair;
 
 public class RSA {
 	final static String		ALGORITHM	= "RSA";
@@ -15,8 +21,7 @@ public class RSA {
 	static private KeyFactory getKeyFactory() {
 		try {
 			return KeyFactory.getInstance(ALGORITHM);
-		}
-		catch (Exception e) {
+		} catch (Exception e) {
 			// built in
 		}
 		return null;
@@ -38,10 +43,9 @@ public class RSA {
 		return create(new RSAPrivateKeySpec(m, e));
 	}
 
-	public static Pair<RSAPrivateKey,RSAPublicKey> generate() throws NoSuchAlgorithmException {
+	public static Pair<RSAPrivateKey, RSAPublicKey> generate() throws NoSuchAlgorithmException {
 		KeyPairGenerator kpg = KeyPairGenerator.getInstance(ALGORITHM);
 		KeyPair keypair = kpg.generateKeyPair();
-		return new Pair<RSAPrivateKey,RSAPublicKey>((RSAPrivateKey) keypair.getPrivate(),
-				(RSAPublicKey) keypair.getPublic());
+		return new Pair<>((RSAPrivateKey) keypair.getPrivate(), (RSAPublicKey) keypair.getPublic());
 	}
 }

@@ -1,24 +1,38 @@
 package aQute.bnd.maven;
 
-import java.io.*;
-import java.util.*;
-import java.util.jar.*;
+import static aQute.libg.slf4j.GradleLogging.LIFECYCLE;
 
-import aQute.bnd.build.*;
-import aQute.bnd.header.*;
-import aQute.bnd.osgi.*;
-import aQute.libg.command.*;
-import aQute.service.reporter.*;
+import java.io.File;
+import java.io.IOException;
+import java.io.OutputStream;
+import java.util.Map;
+import java.util.Set;
+import java.util.jar.Manifest;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import aQute.bnd.build.Project;
+import aQute.bnd.header.Parameters;
+import aQute.bnd.osgi.Constants;
+import aQute.bnd.osgi.Jar;
+import aQute.bnd.osgi.JarResource;
+import aQute.bnd.osgi.Processor;
+import aQute.bnd.osgi.Resource;
+import aQute.lib.io.IO;
+import aQute.libg.command.Command;
+import aQute.service.reporter.Reporter;
 
 public class MavenDeployCmd extends Processor {
+	private final static Logger	logger		= LoggerFactory.getLogger(MavenDeployCmd.class);
 
-	String		repository	= "nexus";
-	String		url			= "http://oss.sonatype.org/service/local/staging/deploy/maven2";
-	String		homedir;
-	String		keyname;
+	String						repository	= "nexus";
+	String						url			= "http://oss.sonatype.org/service/local/staging/deploy/maven2";
+	String						homedir;
+	String						keyname;
 
-	String		passphrase;
-	Reporter	reporter;
+	String						passphrase;
+	Reporter					reporter;
 
 	/**
 	 * maven deploy [-url repo] [-passphrase passphrase] [-homedir homedir]
@@ -31,8 +45,8 @@ public class MavenDeployCmd extends Processor {
 	void run(String args[], int i) throws Exception {
 		if (i >= args.length) {
 			System.err.printf("Usage:%n");
-			System.err
-					.println("  deploy [-url repo] [-passphrase passphrase] [-homedir homedir] [-keyname keyname] bundle ...");
+			System.err.println(
+				"  deploy [-url repo] [-passphrase passphrase] [-homedir homedir] [-keyname keyname] bundle ...");
 			System.err.println("  settings");
 			return;
 		}
@@ -56,7 +70,7 @@ public class MavenDeployCmd extends Processor {
 
 	}
 
-	public void setProperties(Map<String,String> map) {
+	public void setProperties(Map<String, String> map) {
 		repository = map.get("repository");
 		url = map.get("url");
 		passphrase = map.get("passphrase");
@@ -78,11 +92,11 @@ public class MavenDeployCmd extends Processor {
 	public boolean deploy(Project project, Jar original) throws Exception {
 		Parameters deploy = project.parseHeader(project.getProperty(Constants.DEPLOY));
 
-		Map<String,String> maven = deploy.get(repository);
+		Map<String, String> maven = deploy.get(repository);
 		if (maven == null)
 			return false; // we're not playing for this bundle
 
-		project.progress("deploying %s to Maven repo: %s", original, repository);
+		logger.info(LIFECYCLE, "deploying {} to Maven repo: {}", original, repository);
 		File target = project.getTarget();
 		File tmp = Processor.getFile(target, repository);
 		if (!tmp.exists() && !tmp.mkdirs()) {
@@ -93,48 +107,40 @@ public class MavenDeployCmd extends Processor {
 		if (manifest == null)
 			project.error("Jar has no manifest: %s", original);
 		else {
-			project.progress("Writing pom.xml");
+			logger.info(LIFECYCLE, "Writing pom.xml");
 			PomResource pom = new PomResource(manifest);
 			pom.setProperties(maven);
 			File pomFile = write(tmp, pom, "pom.xml");
 
-			Jar main = new Jar("main");
-			Jar src = new Jar("src");
-			try {
+			try (Jar main = new Jar("main"); Jar src = new Jar("src")) {
 				split(original, main, src);
 				Parameters exports = project.parseHeader(manifest.getMainAttributes()
-						.getValue(Constants.EXPORT_PACKAGE));
+					.getValue(Constants.EXPORT_PACKAGE));
 				File jdoc = new File(tmp, "jdoc");
-				if (!jdoc.exists() && !jdoc.mkdirs()) {
-					throw new IOException("Could not create directory " + jdoc);
-				}
-				project.progress("Generating Javadoc for: " + exports.keySet());
+				IO.mkdirs(jdoc);
+				logger.info(LIFECYCLE, "Generating Javadoc for: {}", exports.keySet());
 				Jar javadoc = javadoc(jdoc, project, exports.keySet());
-				project.progress("Writing javadoc jar");
+				logger.info(LIFECYCLE, "Writing javadoc jar");
 				File javadocFile = write(tmp, new JarResource(javadoc), "javadoc.jar");
-				project.progress("Writing main file");
+				logger.info(LIFECYCLE, "Writing main file");
 				File mainFile = write(tmp, new JarResource(main), "main.jar");
-				project.progress("Writing sources file");
+				logger.info(LIFECYCLE, "Writing sources file");
 				File srcFile = write(tmp, new JarResource(main), "src.jar");
 
-				project.progress("Deploying main file");
+				logger.info(LIFECYCLE, "Deploying main file");
 				maven_gpg_sign_and_deploy(project, mainFile, null, pomFile);
-				project.progress("Deploying main sources file");
+				logger.info(LIFECYCLE, "Deploying main sources file");
 				maven_gpg_sign_and_deploy(project, srcFile, "sources", null);
-				project.progress("Deploying main javadoc file");
+				logger.info(LIFECYCLE, "Deploying main javadoc file");
 				maven_gpg_sign_and_deploy(project, javadocFile, "javadoc", null);
-
-			}
-			finally {
-				main.close();
-				src.close();
 			}
 		}
 		return true;
 	}
 
 	private void split(Jar original, Jar main, Jar src) {
-		for (Map.Entry<String,Resource> e : original.getResources().entrySet()) {
+		for (Map.Entry<String, Resource> e : original.getResources()
+			.entrySet()) {
 			String path = e.getKey();
 			if (path.startsWith("OSGI-OPT/src/")) {
 				src.putResource(path.substring("OSGI-OPT/src/".length()), e.getValue());
@@ -158,22 +164,23 @@ public class MavenDeployCmd extends Processor {
 		command.setTrace();
 		command.add(b.getProperty("mvn", "mvn"));
 		command.add("gpg:sign-and-deploy-file", "-DreleaseInfo=true", "-DpomFile=pom.xml");
-		command.add("-Dfile=" + file.getAbsolutePath());
+		command.add("-Dfile=" + IO.absolutePath(file));
 		command.add("-DrepositoryId=" + repository);
 		command.add("-Durl=" + url);
 		optional(command, "passphrase", passphrase);
 		optional(command, "keyname", keyname);
 		optional(command, "homedir", homedir);
 		optional(command, "classifier", classifier);
-		optional(command, "pomFile", pomFile == null ? null : pomFile.getAbsolutePath());
+		optional(command, "pomFile", pomFile == null ? null
+			: IO.absolutePath(pomFile));
 
 		StringBuilder stdout = new StringBuilder();
 		StringBuilder stderr = new StringBuilder();
 
 		int result = command.execute(stdout, stderr);
 		if (result != 0) {
-			b.error("Maven deploy to %s failed to sign and transfer %s because %s", repository, file, "" + stdout
-					+ stderr);
+			b.error("Maven deploy to %s failed to sign and transfer %s because %s", repository, file,
+				"" + stdout + stderr);
 		}
 	}
 
@@ -189,7 +196,7 @@ public class MavenDeployCmd extends Processor {
 
 		command.add(b.getProperty("javadoc", "javadoc"));
 		command.add("-d");
-		command.add(tmp.getAbsolutePath());
+		command.add(IO.absolutePath(tmp));
 		command.add("-sourcepath");
 		command.add(Processor.join(b.getSourcePath(), File.pathSeparator));
 
@@ -213,12 +220,8 @@ public class MavenDeployCmd extends Processor {
 
 	private File write(File base, Resource r, String fileName) throws Exception {
 		File f = Processor.getFile(base, fileName);
-		OutputStream out = new FileOutputStream(f);
-		try {
+		try (OutputStream out = IO.outputStream(f)) {
 			r.write(out);
-		}
-		finally {
-			out.close();
 		}
 		return f;
 	}

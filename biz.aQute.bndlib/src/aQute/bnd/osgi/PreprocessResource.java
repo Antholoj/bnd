@@ -1,10 +1,15 @@
 package aQute.bnd.osgi;
 
-import java.io.*;
+import java.io.BufferedReader;
+import java.io.PrintWriter;
+import java.nio.ByteBuffer;
+
+import aQute.lib.io.ByteBufferOutputStream;
+import aQute.lib.io.IO;
 
 public class PreprocessResource extends AbstractResource {
-	final Resource	resource;
-	final Processor	processor;
+	private final Resource	resource;
+	private final Processor	processor;
 
 	public PreprocessResource(Processor processor, Resource r) {
 		super(r.lastModified());
@@ -15,32 +20,34 @@ public class PreprocessResource extends AbstractResource {
 
 	@Override
 	protected byte[] getBytes() throws Exception {
-		ByteArrayOutputStream bout = new ByteArrayOutputStream(2000);
-		OutputStreamWriter osw = new OutputStreamWriter(bout, Constants.DEFAULT_CHARSET);
-		PrintWriter pw = new PrintWriter(osw);
-		InputStream in = null;
-		BufferedReader rdr = null;
-		try {
-			in = resource.openInputStream();
-			rdr = new BufferedReader(new InputStreamReader(in, "UTF8"));
-			String line = rdr.readLine();
-			while (line != null) {
-				line = processor.getReplacer().process(line);
-				pw.println(line);
-				line = rdr.readLine();
+		try (ByteBufferOutputStream bout = new ByteBufferOutputStream();
+			PrintWriter pw = IO.writer(bout, Constants.DEFAULT_CHARSET)) {
+			ByteBuffer bb = resource.buffer();
+			BufferedReader r;
+			if (bb != null) {
+				r = IO.reader(bb, Constants.DEFAULT_CHARSET);
+			} else {
+				r = IO.reader(resource.openInputStream(), Constants.DEFAULT_CHARSET);
+			}
+			try (BufferedReader rdr = r) {
+				String line = rdr.readLine();
+				while (line != null) {
+					line = processor.getReplacer()
+						.process(line);
+					pw.println(line);
+					line = rdr.readLine();
+				}
+			} catch (Exception e) {
+				bb = resource.buffer();
+				if (bb != null) {
+					return IO.read(bb);
+				} else {
+					return IO.read(resource.openInputStream());
+				}
 			}
 			pw.flush();
 			byte[] data = bout.toByteArray();
 			return data;
-
-		}
-		finally {
-			if (rdr != null) {
-				rdr.close();
-			}
-			if (in != null) {
-				in.close();
-			}
 		}
 	}
 }

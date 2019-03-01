@@ -1,35 +1,48 @@
 package aQute.lib.json;
 
-import java.io.*;
-import java.lang.reflect.*;
-import java.util.*;
-import java.util.regex.*;
+import java.io.EOFException;
+import java.io.File;
+import java.io.OutputStream;
+import java.lang.reflect.Array;
+import java.lang.reflect.Constructor;
+import java.lang.reflect.GenericArrayType;
+import java.lang.reflect.Method;
+import java.lang.reflect.ParameterizedType;
+import java.lang.reflect.Type;
+import java.lang.reflect.TypeVariable;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.Date;
+import java.util.Dictionary;
+import java.util.Hashtable;
+import java.util.LinkedHashMap;
+import java.util.Map;
+import java.util.UUID;
+import java.util.WeakHashMap;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.regex.Pattern;
 
 /**
  * This is a simple JSON Coder and Encoder that uses the Java type system to
  * convert data objects to JSON and JSON to (type safe) Java objects. The
  * conversion is very much driven by classes and their public fields. Generic
- * information, when present is taken into account. </p> Usage patterns to
- * encode:
+ * information, when present is taken into account.
+ * </p>
+ * Usage patterns to encode:
  * 
  * <pre>
- *  JSONCoder codec = new JSONCodec(); // 
- * 	assert "1".equals( codec.enc().to().put(1).toString());
- * 	assert "[1,2,3]".equals( codec.enc().to().put(Arrays.asList(1,2,3).toString());
- * 
- *  Map m = new HashMap();
- *  m.put("a", "A");
- * 	assert "{\"a\":\"A\"}".equals( codec.enc().to().put(m).toString());
- * 
- *  static class D { public int a; }
- *  D d = new D();
- *  d.a = 41;
- *  assert "{\"a\":41}".equals( codec.enc().to().put(d).toString());
+ *  JSONCoder codec = new JSONCodec(); // assert "1".equals(
+ * codec.enc().to().put(1).toString()); assert "[1,2,3]".equals(
+ * codec.enc().to().put(Arrays.asList(1,2,3).toString()); Map m = new HashMap();
+ * m.put("a", "A"); assert "{\"a\":\"A\"}".equals(
+ * codec.enc().to().put(m).toString()); static class D { public int a; } D d =
+ * new D(); d.a = 41; assert "{\"a\":41}".equals(
+ * codec.enc().to().put(d).toString());
  * </pre>
  * 
  * It is possible to redirect the encoder to another output (default is a
- * string). See {@link Encoder#to()},{@link Encoder#to(File))},
- * {@link Encoder#to(OutputStream)}, {@link Encoder#to(Appendable))}. To reset
+ * string). See {@link Encoder#to()},{@link Encoder#to(File)},
+ * {@link Encoder#to(OutputStream)}, {@link Encoder#to(Appendable)}. To reset
  * the string output call {@link Encoder#to()}.
  * <p/>
  * This Codec class can be used in a concurrent environment. The Decoders and
@@ -41,18 +54,20 @@ public class JSONCodec {
 	final static String								START_CHARACTERS	= "[{\"-0123456789tfn";
 
 	// Handlers
-	private final static WeakHashMap<Type,Handler>	handlers			= new WeakHashMap<Type,Handler>();
+	private final static WeakHashMap<Type, Handler>	handlers			= new WeakHashMap<>();
 	private static StringHandler					sh					= new StringHandler();
 	private static BooleanHandler					bh					= new BooleanHandler();
 	private static CharacterHandler					ch					= new CharacterHandler();
 	private static CollectionHandler				dch					= new CollectionHandler(ArrayList.class,
-																				Object.class);
+		Object.class);
 	private static SpecialHandler					sph					= new SpecialHandler(Pattern.class, null, null);
 	private static DateHandler						sdh					= new DateHandler();
 	private static FileHandler						fh					= new FileHandler();
 	private static ByteArrayHandler					byteh				= new ByteArrayHandler();
+	private static UUIDHandler						uuidh				= new UUIDHandler();
 
 	boolean											ignorenull;
+	Map<Type, Handler>								localHandlers		= new ConcurrentHashMap<>();
 
 	/**
 	 * Create a new Encoder with the state and appropriate API.
@@ -75,7 +90,7 @@ public class JSONCodec {
 	/*
 	 * Work horse encode methods, all encoding ends up here.
 	 */
-	void encode(Encoder app, Object object, Type type, Map<Object,Type> visited) throws Exception {
+	void encode(Encoder app, Object object, Type type, Map<Object, Type> visited) throws Exception {
 
 		// Get the null out of the way
 
@@ -93,20 +108,21 @@ public class JSONCodec {
 			type = object.getClass();
 
 		// Dispatch to the handler who knows how to handle the given type.
-		Handler h = getHandler(type);
+		Handler h = getHandler(type, object.getClass());
 		h.encode(app, object, visited);
 	}
 
-	/*
+	/**
 	 * This method figures out which handler should handle the type specific
 	 * stuff. It returns a handler for each type. If no appropriate handler
 	 * exists, it will create one for the given type. There are actually quite a
 	 * lot of handlers since Java is not very object oriented.
+	 * 
 	 * @param type
-	 * @return
+	 * @return a {@code Handler} appropriate for {@code type}
 	 * @throws Exception
 	 */
-	Handler getHandler(Type type) throws Exception {
+	Handler getHandler(Type type, Class<?> actual) throws Exception {
 
 		// First the static hard coded handlers for the common types.
 
@@ -131,6 +147,15 @@ public class JSONCodec {
 		if (File.class == type)
 			return fh;
 
+		if (UUID.class == type)
+			return uuidh;
+
+		if (type instanceof GenericArrayType) {
+			Type sub = ((GenericArrayType) type).getGenericComponentType();
+			if (sub == byte.class)
+				return byteh;
+		}
+
 		Handler h;
 		synchronized (handlers) {
 			h = handlers.get(type);
@@ -139,9 +164,13 @@ public class JSONCodec {
 		if (h != null)
 			return h;
 
+		h = localHandlers.get(type);
+		if (h != null)
+			return h;
+
 		if (type instanceof Class) {
 
-			Class< ? > clazz = (Class< ? >) type;
+			Class<?> clazz = (Class<?>) type;
 
 			if (Enum.class.isAssignableFrom(clazz))
 				h = new EnumHandler(clazz);
@@ -157,18 +186,16 @@ public class JSONCodec {
 				h = new NumberHandler(clazz);
 			else {
 				Method valueOf = null;
-				Constructor< ? > constructor = null;
+				Constructor<?> constructor = null;
 
 				try {
 					constructor = clazz.getConstructor(String.class);
-				}
-				catch (Exception e) {
+				} catch (Exception e) {
 					// Ignore
 				}
 				try {
 					valueOf = clazz.getMethod("valueOf", String.class);
-				}
-				catch (Exception e) {
+				} catch (Exception e) {
 					// Ignore
 				}
 				if (constructor != null || valueOf != null)
@@ -187,20 +214,42 @@ public class JSONCodec {
 				ParameterizedType pt = (ParameterizedType) type;
 				Type rawType = pt.getRawType();
 				if (rawType instanceof Class) {
-					Class< ? > rawClass = (Class< ? >) rawType;
+					Class<?> rawClass = (Class<?>) rawType;
 					if (Iterable.class.isAssignableFrom(rawClass))
 						h = new CollectionHandler(rawClass, pt.getActualTypeArguments()[0]);
 					else if (Map.class.isAssignableFrom(rawClass))
 						h = new MapHandler(rawClass, pt.getActualTypeArguments()[0], pt.getActualTypeArguments()[1]);
 					else if (Dictionary.class.isAssignableFrom(rawClass))
 						h = new MapHandler(Hashtable.class, pt.getActualTypeArguments()[0],
-								pt.getActualTypeArguments()[1]);
+							pt.getActualTypeArguments()[1]);
 					else
-						throw new IllegalArgumentException("Found a parameterized type that is not a map or collection");
+						//
+						// We try to use the rawtype instead.
+						//
+						return getHandler(rawType, null);
 				}
 			} else if (type instanceof GenericArrayType) {
 				GenericArrayType gat = (GenericArrayType) type;
-				h = new ArrayHandler(getRawClass(type), gat.getGenericComponentType());
+				if (gat.getGenericComponentType() == byte[].class)
+					h = byteh;
+				else
+					h = new ArrayHandler(getRawClass(type), gat.getGenericComponentType());
+			} else if (type instanceof TypeVariable) {
+				if (actual != null)
+					//
+					// We can save ourselves a lot of work if we have
+					// an actual type (the type of the object to encode)
+					//
+					h = getHandler(actual, null);
+				else {
+					TypeVariable<?> tv = (TypeVariable<?>) type;
+					Type[] bounds = tv.getBounds();
+					if (bounds == null || bounds.length == 0) {
+						h = new ObjectHandler(this, Object.class);
+					} else {
+						h = getHandler(bounds[bounds.length - 1], null);
+					}
+				}
 			} else
 				throw new IllegalArgumentException("Found a parameterized type that is not a map or collection");
 		}
@@ -263,7 +312,7 @@ public class JSONCodec {
 			}
 		}
 
-		h = getHandler(type);
+		h = getHandler(type, null);
 
 		switch (c) {
 			case '{' :
@@ -273,7 +322,8 @@ public class JSONCodec {
 				return h.decodeArray(isr);
 
 			case '"' :
-				return h.decode(isr, parseString(isr));
+				String string = parseString(isr);
+				return h.decode(isr, string);
 
 			case 'n' :
 				isr.expect("ull");
@@ -281,11 +331,11 @@ public class JSONCodec {
 
 			case 't' :
 				isr.expect("rue");
-				return h.decode(isr,Boolean.TRUE);
+				return h.decode(isr, Boolean.TRUE);
 
 			case 'f' :
 				isr.expect("alse");
-				return h.decode(isr,Boolean.FALSE);
+				return h.decode(isr, Boolean.FALSE);
 
 			case '0' :
 			case '1' :
@@ -298,7 +348,7 @@ public class JSONCodec {
 			case '8' :
 			case '9' :
 			case '-' :
-				return h.decode(isr,parseNumber(isr));
+				return h.decode(isr, parseNumber(isr));
 
 			default :
 				throw new IllegalArgumentException("Unexpected character in input stream: " + (char) c);
@@ -351,7 +401,7 @@ public class JSONCodec {
 
 					default :
 						throw new IllegalArgumentException(
-								"The only characters after a backslash are \", \\, b, f, n, r, t, and u but got " + c);
+							"The only characters after a backslash are \", \\, b, f, n, r, t, and u but got " + c);
 				}
 			} else
 				sb.append((char) c);
@@ -449,15 +499,15 @@ public class JSONCodec {
 				continue;
 			}
 
-			throw new IllegalArgumentException("Invalid character in parsing list, expected ] or , but found "
-					+ (char) c);
+			throw new IllegalArgumentException(
+				"Invalid character in parsing list, expected ] or , but found " + (char) c);
 		}
 		assert r.current() == ']';
 		r.read(); // skip closing
 	}
 
 	@SuppressWarnings("rawtypes")
-	Class< ? > getRawClass(Type type) {
+	Class<?> getRawClass(Type type) {
 		if (type instanceof Class)
 			return (Class) type;
 
@@ -467,18 +517,19 @@ public class JSONCodec {
 		if (type instanceof GenericArrayType) {
 			Type subType = ((GenericArrayType) type).getGenericComponentType();
 			Class c = getRawClass(subType);
-			return Array.newInstance(c, 0).getClass();
+			return Array.newInstance(c, 0)
+				.getClass();
 		}
 
 		throw new IllegalArgumentException(
-				"Does not support generics beyond Parameterized Type  and GenericArrayType, got " + type);
+			"Does not support generics beyond Parameterized Type  and GenericArrayType, got " + type);
 	}
 
 	/**
 	 * Ignore null values in output and input
 	 * 
 	 * @param ignorenull
-	 * @return
+	 * @return this
 	 */
 	public JSONCodec setIgnorenull(boolean ignorenull) {
 		this.ignorenull = ignorenull;
@@ -487,6 +538,15 @@ public class JSONCodec {
 
 	public boolean isIgnorenull() {
 		return ignorenull;
+	}
+
+	/**
+	 * Add a new local handler
+	 */
+
+	public JSONCodec addHandler(Type type, Handler handler) {
+		localHandlers.put(type, handler);
+		return this;
 	}
 
 }

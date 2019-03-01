@@ -1,0 +1,24 @@
+# Set javac settings from JDT prefs
+-include: ${workspace}/cnf/includes/jdt.bnd
+
+-resourceonly: true
+
+Bundle-Description: Embedded Repo for bnd workspace.
+Timestamp: ${_@tstamp}
+
+-includeresource: \
+	biz.aQute.launcher/biz.aQute.launcher-${base.version}.jar=${repo;biz.aQute.launcher;snapshot}, \
+	biz.aQute.remote.launcher/biz.aQute.remote.launcher-${base.version}.jar=${repo;biz.aQute.remote.launcher;snapshot}, \
+	biz.aQute.junit/biz.aQute.junit-${base.version}.jar=${repo;biz.aQute.junit;snapshot}, \
+	biz.aQute.tester/biz.aQute.tester-${base.version}.jar=${repo;biz.aQute.tester;snapshot}
+
+
+-dependson: \
+	biz.aQute.junit, \
+	biz.aQute.launcher, \
+	biz.aQute.remote, \
+	biz.aQute.tester
+
+-digests: MD5, SHA1
+
+-releaserepo:

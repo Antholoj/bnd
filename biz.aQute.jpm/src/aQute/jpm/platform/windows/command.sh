@@ -1,1 +1,0 @@
-""%java%" %jvmArgs% -cp "%classpath%" %main%" 

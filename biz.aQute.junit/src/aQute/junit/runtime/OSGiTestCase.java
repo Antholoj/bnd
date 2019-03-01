@@ -1,11 +1,18 @@
 package aQute.junit.runtime;
 
-import java.text.*;
+import java.text.MessageFormat;
 
-import junit.framework.*;
+import org.osgi.framework.Bundle;
+import org.osgi.framework.BundleContext;
+import org.osgi.framework.Constants;
+import org.osgi.framework.Filter;
+import org.osgi.framework.FrameworkUtil;
+import org.osgi.framework.InvalidSyntaxException;
+import org.osgi.framework.ServiceReference;
+import org.osgi.util.tracker.ServiceTracker;
 
-import org.osgi.framework.*;
-import org.osgi.util.tracker.*;
+import junit.framework.AssertionFailedError;
+import junit.framework.TestCase;
 
 public abstract class OSGiTestCase extends TestCase {
 	/**
@@ -15,7 +22,8 @@ public abstract class OSGiTestCase extends TestCase {
 	 * by a bundle -- for example, if the Test is executed outside of an OSGi
 	 * Framework.
 	 * 
-	 * @return The {@link BundleContext} of the receiver, or {@code null} if the
+	 * @return The {@link BundleContext} of the receiver, or {@code
+		 * null} if the
 	 */
 	protected BundleContext getBundleContext() {
 		Bundle bundle = FrameworkUtil.getBundle(this.getClass());
@@ -26,12 +34,10 @@ public abstract class OSGiTestCase extends TestCase {
 	 * Asserts that at least one service of the specified type is currently
 	 * available. If not, an {@link AssertionFailedError} is thrown.
 	 * 
-	 * @param service
-	 *            The service interface type.
-	 * @param filter
-	 *            An additional service filter, which may be {@code null}.
+	 * @param service The service interface type.
+	 * @param filter An additional service filter, which may be {@code null}.
 	 */
-	protected void assertSvcAvail(Class< ? > service, String filter) {
+	protected void assertSvcAvail(Class<?> service, String filter) {
 		assertSvcAvail(null, service, filter);
 	}
 
@@ -41,18 +47,16 @@ public abstract class OSGiTestCase extends TestCase {
 	 * given message.
 	 * 
 	 * @param message
-	 * @param service
-	 *            The service interface type.
-	 * @param filter
-	 *            An additional service filter, which may be {@code null}.
+	 * @param service The service interface type.
+	 * @param filter An additional service filter, which may be {@code
+		 * null}.
 	 */
-	protected void assertSvcAvail(String message, Class< ? > service, String filter) {
+	protected void assertSvcAvail(String message, Class<?> service, String filter) {
 		BundleContext context = getBundleContext();
 		ServiceReference[] refs = null;
 		try {
 			refs = context.getServiceReferences(service.getName(), filter);
-		}
-		catch (InvalidSyntaxException e) {
+		} catch (InvalidSyntaxException e) {
 			fail("Invalid filter syntax");
 		}
 
@@ -68,8 +72,7 @@ public abstract class OSGiTestCase extends TestCase {
 		try {
 			if (!service.isInstance(svcObj))
 				fail(message);
-		}
-		finally {
+		} finally {
 			context.ungetService(refs[0]);
 		}
 	}
@@ -87,31 +90,23 @@ public abstract class OSGiTestCase extends TestCase {
 	 * </p>
 	 * 
 	 * <pre>
-	 * String	reply	= withService(HelloService.class, null, new Operation&lt;HelloService,String&gt;() {
-	 * 					public String call(HelloService service) {
-	 * 						return service.sayHello();
-	 * 					}
-	 * 				});
+	 * String reply = withService(HelloService.class, null, new Operation&lt;HelloService, String&gt;() {
+	 * 	public String call(HelloService service) {
+	 * 		return service.sayHello();
+	 * 	}
+	 * });
 	 * </pre>
 	 * 
-	 * @param <S>
-	 *            The service type.
-	 * @param <R>
-	 *            The result type.
-	 * @param service
-	 *            The service class.
-	 * @param filter
-	 *            An additional filter expression, or {@code null}.
-	 * @param timeout
-	 *            The maximum time to wait (in milliseconds) for a service to
-	 *            become available; a zero or negative timeout implies we should
-	 *            fail if the service is not immediately available.
-	 * @param operation
-	 *            The operation to perform against the service.
-	 * @return
+	 * @param <S> The service type.
+	 * @param <R> The result type.
+	 * @param service The service class.
+	 * @param filter An additional filter expression, or {@code
+	 * null}.
+	 * @param operation The operation to perform against the service.
 	 * @throws Exception
 	 */
-	protected <S, R> R withService(Class<S> service, String filter, Operation< ? super S,R> operation) throws Exception {
+	protected <S, R> R withService(Class<S> service, String filter, Operation<? super S, R> operation)
+		throws Exception {
 		return withService(service, filter, 0, operation);
 	}
 
@@ -124,42 +119,35 @@ public abstract class OSGiTestCase extends TestCase {
 	 * </p>
 	 * 
 	 * <pre>
-	 * String	reply	= withService(HelloService.class, null, 0, new Operation&lt;HelloService,String&gt;() {
-	 * 					public String call(HelloService service) {
-	 * 						return service.sayHello();
-	 * 					}
-	 * 				});
+	 * String reply = withService(HelloService.class, null, 0, new Operation&lt;HelloService, String&gt;() {
+	 * 	public String call(HelloService service) {
+	 * 		return service.sayHello();
+	 * 	}
+	 * });
 	 * </pre>
 	 * 
-	 * @param <S>
-	 *            The service type.
-	 * @param <R>
-	 *            The result type.
-	 * @param service
-	 *            The service class.
-	 * @param filter
-	 *            An additional filter expression, or {@code null}.
-	 * @param timeout
-	 *            The maximum time to wait (in ms) for a service to become
+	 * @param <S> The service type.
+	 * @param <R> The result type.
+	 * @param service The service class.
+	 * @param filter An additional filter expression, or {@code
+	 * null}.
+	 * @param timeout The maximum time to wait (in ms) for a service to become
 	 *            available; a zero or negative timeout implies we should fail
 	 *            if the service is not immediatelt available.
-	 * @param operation
-	 *            The operation to perform against the service.
-	 * @return
+	 * @param operation The operation to perform against the service.
 	 * @throws Exception
 	 */
-	protected <S, R> R withService(Class<S> service, String filter, long timeout, Operation< ? super S,R> operation)
-			throws Exception {
+	protected <S, R> R withService(Class<S> service, String filter, long timeout, Operation<? super S, R> operation)
+		throws Exception {
 		BundleContext context = getBundleContext();
 
 		ServiceTracker tracker = null;
 		if (filter != null) {
 			try {
-				Filter combined = FrameworkUtil.createFilter("(" + Constants.OBJECTCLASS + "=" + service.getName()
-						+ ")");
+				Filter combined = FrameworkUtil
+					.createFilter("(" + Constants.OBJECTCLASS + "=" + service.getName() + ")");
 				tracker = new ServiceTracker(context, combined, null);
-			}
-			catch (InvalidSyntaxException e) {
+			} catch (InvalidSyntaxException e) {
 				fail("Invalid filter syntax.");
 				return null;
 			}
@@ -181,11 +169,9 @@ public abstract class OSGiTestCase extends TestCase {
 			@SuppressWarnings("unchecked")
 			S casted = (S) instance;
 			return operation.perform(casted);
-		}
-		catch (InterruptedException e) {
+		} catch (InterruptedException e) {
 			fail("Interrupted.");
-		}
-		finally {
+		} finally {
 			tracker.close();
 		}
 
@@ -196,6 +182,6 @@ public abstract class OSGiTestCase extends TestCase {
 	/**
 	 * Default wait timeout is 10 seconds
 	 */
-	public static long	DEFAULT_TIMEOUT	= 10000;
+	public static long DEFAULT_TIMEOUT = 10000;
 
 }

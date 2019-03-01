@@ -1,0 +1,38 @@
+# Set javac settings from JDT prefs
+-include: ${workspace}/cnf/includes/jdt.bnd
+
+-dependson: biz.aQute.bnd.embedded-repo
+
+-includepackage: \
+	aQute.bnd.gradle.*
+
+-conditionalpackage: \
+    aQute.lib.*, \
+    aQute.libg.*
+
+-digests: MD5, SHA1
+
+Bundle-Description: The bnd gradle plugin.
+
+-buildpath: \
+	aQute.libg;version=project, \
+	biz.aQute.bndlib;version=latest, \
+	biz.aQute.resolve;version=latest, \
+	biz.aQute.repository;version=latest
+
+pluginClasspath: ${p-buildpath;\\${pathseparator}}
+
+-includeresource: \
+	OSGI-OPT/src=src, \
+	resources, \
+	embedded-repo.jar=${repo;biz.aQute.bnd.embedded-repo;latest}
+
+-builderignore: testresources
+
+# Use groovydoc task generated doc for -javadoc.jar
+-maven-release: pom;path=JAR,javadoc;path=${target}/docs/groovydoc
+
+#
+# The groovy compiler must be run from the gradle build
+#
+-fixupmessages.groovy: "Unused Private*aQute.bnd.gradle";replace:="The groovy classes must be compiled with the gradle build."

@@ -1,10 +1,15 @@
 package aQute.libg.cryptography;
 
-import java.math.*;
-import java.security.*;
-import java.security.interfaces.*;
-import java.security.spec.*;
-import java.util.regex.*;
+import java.math.BigInteger;
+import java.security.NoSuchAlgorithmException;
+import java.security.PrivateKey;
+import java.security.PublicKey;
+import java.security.Signature;
+import java.security.interfaces.RSAPrivateKey;
+import java.security.interfaces.RSAPublicKey;
+import java.security.spec.RSAPublicKeySpec;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 public class Crypto {
 	static final Pattern	RSA_PRIVATE	= Pattern.compile("\\s*RSA\\.Private\\((\\p{XDigit})+:(\\p{XDigit})+\\)\\s*");
@@ -13,9 +18,10 @@ public class Crypto {
 	/**
 	 * @param <T>
 	 * @param spec
-	 * @return
+	 * @return key
 	 * @throws Exception
 	 */
+	@SuppressWarnings("unchecked")
 	public static <T> T fromString(String spec, Class<T> c) throws Exception {
 		if (PrivateKey.class.isAssignableFrom(c)) {
 			Matcher m = RSA_PRIVATE.matcher(spec);

@@ -1,0 +1,51 @@
+apply plugin: 'groovy'
+
+repositories {
+  mavenCentral()
+}
+
+dependencies {
+    compile localGroovy()
+    compile gradleApi()
+    testCompile gradleTestKit()
+    testCompile('org.spockframework:spock-core:1.1-groovy-2.4')  {
+        exclude module: 'groovy-all'
+    }
+}
+
+if (JavaVersion.current().isJava9Compatible()) {
+    tasks.withType(GroovyCompile.class).configureEach {
+        groovyOptions.fork 'jvmArgs': java9options
+    }
+}
+
+tasks.named('test') {
+    dependsOn 'jar'
+    File source = project.file('testresources')
+    File target = new File(project.buildDir, 'testresources')
+    doFirst { // copy test resources into build dir
+        project.delete(target)
+        copy {
+            from source
+            into target
+        }
+    }
+}
+
+tasks.named('release') {
+  dependsOn 'groovydoc'
+}
+
+tasks.named('classes') {
+    inputs.property('pluginClasspath', bnd('pluginClasspath'))
+    File pluginClasspathFile = new File(tasks.getByName('compileJava').destinationDir, 'plugin-under-test-metadata.properties')
+    outputs.file(pluginClasspathFile).withPropertyName('pluginClasspathFile')
+    doLast {
+        def pluginClasspath = project.files(new File(project.buildDir, "${project.name}.jar"), bnd('pluginClasspath').tokenize(File.pathSeparatorChar))
+        Properties properties = new Properties()
+        properties.setProperty('implementation-classpath', pluginClasspath.asPath)
+        pluginClasspathFile.withOutputStream {
+          properties.store(it, 'plugin-under-test-metadata')
+        }
+    }
+}

@@ -1,13 +1,21 @@
 package aQute.bnd.make.coverage;
 
-import static aQute.bnd.make.coverage.Coverage.*;
+import static aQute.bnd.make.coverage.Coverage.getCrossRef;
 
-import java.io.*;
-import java.util.*;
+import java.io.IOException;
+import java.io.OutputStream;
+import java.io.OutputStreamWriter;
+import java.io.PrintWriter;
+import java.util.Collection;
+import java.util.List;
+import java.util.Map;
 
-import aQute.bnd.osgi.*;
+import aQute.bnd.osgi.Clazz;
 import aQute.bnd.osgi.Clazz.MethodDef;
-import aQute.lib.tag.*;
+import aQute.bnd.osgi.Constants;
+import aQute.bnd.osgi.Descriptors;
+import aQute.bnd.osgi.WriteResource;
+import aQute.lib.tag.Tag;
 
 /**
  * Creates an XML Coverage report. This class can be used as a resource so the
@@ -30,28 +38,28 @@ public class CoverageResource extends WriteResource {
 	@Override
 	public void write(OutputStream out) throws IOException {
 		try {
-			Map<MethodDef,List<MethodDef>> table = getCrossRef(testsuite, service);
+			Map<MethodDef, List<MethodDef>> table = getCrossRef(testsuite, service);
 			Tag coverage = toTag(table);
 			PrintWriter pw = new PrintWriter(new OutputStreamWriter(out, Constants.DEFAULT_CHARSET));
 			try {
 				coverage.print(0, pw);
-			}
-			finally {
+			} finally {
 				pw.flush();
 			}
-		}
-		catch (Exception e) {
+		} catch (Exception e) {
 			e.printStackTrace();
 		}
 	}
 
-	public static Tag toTag(Map<MethodDef,List<MethodDef>> catalog) {
+	public static Tag toTag(Map<MethodDef, List<MethodDef>> catalog) {
 		Tag coverage = new Tag("coverage");
 		String currentClass = null;
 		Tag classTag = null;
 
-		for (Map.Entry<MethodDef,List<MethodDef>> m : catalog.entrySet()) {
-			String className = m.getKey().getContainingClass().getFQN();
+		for (Map.Entry<MethodDef, List<MethodDef>> m : catalog.entrySet()) {
+			String className = m.getKey()
+				.getContainingClass()
+				.getFQN();
 			if (!className.equals(currentClass)) {
 				classTag = new Tag("class");
 				classTag.addAttribute("name", className);
@@ -61,7 +69,7 @@ public class CoverageResource extends WriteResource {
 				currentClass = className;
 			}
 			Tag method = doMethod(new Tag("method"), m.getKey());
-			if ( classTag != null)
+			if (classTag != null)
 				classTag.addContent(method);
 			for (MethodDef r : m.getValue()) {
 				Tag ref = doMethod(new Tag("ref"), r);

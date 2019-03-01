@@ -1,29 +1,44 @@
--buildpath: com.springsource.org.junit,\
-	osgi.cmpn;version=4.2.1,\
-	biz.aQute.bndlib;version=project,\
+# Set javac settings from JDT prefs
+-include: ${workspace}/cnf/includes/jdt.bnd
+
+-buildpath: \
+	osgi.core;version=@4;maven-scope=provided,\
+	osgi.cmpn;version=@4;maven-scope=provided,\
 	aQute.libg;version=project,\
-	osgi.core;version=4.2.1,\
-	ee.j2se;version=${javac.ee}
-	
+	biz.aQute.bndlib;version=latest;maven-scope=provided,\
+    ${replacelist;${list;junit};$;\\;maven-scope=provided}
+
 Tester-Plugin: aQute.junit.plugin.ProjectTesterImpl
 
-javac.source = 1.5
-javac.target = jsr14
-Private-Package: aQute.junit.*,\
-	junit.*,\
-	org.junit.*
-	
-Export-Package: junit.framework; version=3.8,\
-				org.junit.*;version=4.10, \
-				org.hamcrest.*;version=1.0.0
+-includepackage: \
+	aQute.junit.*, \
+	org.assertj.core.*
 
-# The dependency on aQute packages is only for the 
+-includeresource.perm: OSGI-INF/permissions.perm;literal="(java.security.AllPermission)"
+
+Export-Package: \
+	junit.*;version="3.8.2", \
+	org.junit.*, \
+	org.hamcrest.*, \
+	!org.assertj.core.internal.*, \
+	org.assertj.core.*
+
+-fixupmessages.junit: Version for package junit.*3.8.2
+-fixupmessages.assertj: Export org.assertj.core.* private references
+
+# The dependency on aQute packages is only for the
 # master side. When launched, those dependencies
 # are not necessary
-Import-Package: aQute.*;resolution:=optional,*
+Import-Package: \
+	aQute.*;resolution:=optional, \
+	junit.*;version="[3.8,5)",\
+	sun.*; resolution:=optional,\
+	org.junit.jupiter.*;resolution:=optional,\
+	*
+
 Bundle-Activator: aQute.junit.Activator
 Embedded-Activator: aQute.junit.Activator
-Bundle-Version: 1.2.0.${tstamp;yyyyMMdd-HHmmss}
 Bundle-Release: Use main thread for testing, optionally allowing old separate thread model
 
-
+-baseline: *
+-diffpackages: !org.junit.*, !org.assertj.core.*, !org.hamcrest.*, *

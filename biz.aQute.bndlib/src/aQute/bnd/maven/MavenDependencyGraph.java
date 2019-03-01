@@ -1,24 +1,39 @@
 package aQute.bnd.maven;
 
-import java.net.*;
-import java.util.*;
+import java.net.URI;
+import java.net.URISyntaxException;
+import java.net.URL;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
 
-import javax.xml.parsers.*;
-import javax.xml.xpath.*;
+import javax.xml.parsers.DocumentBuilder;
+import javax.xml.parsers.DocumentBuilderFactory;
+import javax.xml.xpath.XPath;
+import javax.xml.xpath.XPathConstants;
+import javax.xml.xpath.XPathFactory;
 
-import org.w3c.dom.*;
+import org.w3c.dom.Document;
+import org.w3c.dom.Node;
+import org.w3c.dom.NodeList;
 
 public class MavenDependencyGraph {
 	final static DocumentBuilderFactory	docFactory		= DocumentBuilderFactory.newInstance();
 	final static XPathFactory			xpathFactory	= XPathFactory.newInstance();
-	final List<Artifact>				dependencies	= new ArrayList<Artifact>();
-	final List<URL>						repositories	= new ArrayList<URL>();
+	final List<Artifact>				dependencies	= new ArrayList<>();
+	final List<URL>						repositories	= new ArrayList<>();
 	final XPath							xpath			= xpathFactory.newXPath();
-	final Map<URI,Artifact>				cache			= new HashMap<URI,Artifact>();
+	final Map<URI, Artifact>			cache			= new HashMap<>();
 	Artifact							root;
 
 	enum Scope {
-		COMPILE, RUNTIME, TEST, PROVIDED, SYSTEM, IMPORT,
+		COMPILE,
+		RUNTIME,
+		TEST,
+		PROVIDED,
+		SYSTEM,
+		IMPORT,
 	}
 
 	public class Artifact {
@@ -30,7 +45,7 @@ public class MavenDependencyGraph {
 		boolean			optional;
 		String			type;
 		URL				url;
-		List<Artifact>	dependencies	= new ArrayList<Artifact>();
+		List<Artifact>	dependencies	= new ArrayList<>();
 
 		public Artifact(URL url) throws Exception {
 			if (url != null) {
@@ -53,7 +68,7 @@ public class MavenDependencyGraph {
 				for (int i = 0; i < evaluate.getLength(); i++) {
 					Node childNode = evaluate.item(i);
 					Artifact artifact = getArtifact(xpath.evaluate("groupId", childNode),
-							xpath.evaluate("artifactId", childNode), xpath.evaluate("version", childNode));
+						xpath.evaluate("artifactId", childNode), xpath.evaluate("version", childNode));
 					add(artifact);
 				}
 			}
@@ -78,13 +93,6 @@ public class MavenDependencyGraph {
 		repositories.add(repository);
 	}
 
-	/**
-	 * @param xp
-	 * @param node
-	 * @param d
-	 * @throws XPathExpressionException
-	 */
-
 	public Artifact getArtifact(String groupId, String artifactId, String version) {
 		for (URL repository : repositories) {
 			String path = getPath(repository.toString(), groupId, artifactId, version);
@@ -95,8 +103,7 @@ public class MavenDependencyGraph {
 					return cache.get(url);
 				}
 				return new Artifact(url.toURL());
-			}
-			catch (Exception e) {
+			} catch (Exception e) {
 				System.err.println("Failed to get " + artifactId + " from " + repository);
 			}
 		}

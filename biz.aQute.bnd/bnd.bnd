@@ -1,22 +1,80 @@
-Bundle-Version: 				2.1.0.${tstamp;yyyyMMdd-HHmmss}
-Conditional-Package: 			aQute.libg.*,aQute.lib.*,aQute.configurable
+#
+# -bnd command line-
+#
+# This is not a bundle ...
+#
+-sources: false
 
--sub: *.bnd
+# Set javac settings from JDT prefs
+-include: ${workspace}/cnf/includes/jdt.bnd
 
--buildpath: aQute.libg;version=latest,\
-	ee.j2se;version=${javac.ee},\
-	biz.aQute.bndlib;version=project,\
-	biz.aQute.junit;version=project,\
-	biz.aQute.launcher;version=project,\
-	org.apache.tools.ant,\
-	osgi.cmpn;version=4.3,\
-	osgi.core;version=4.1,\
-	junit.osgi,\
-	org.osgi.impl.bundle.bindex,\
-	osgi.r5;version=1.0.1,\
-	aQute.library.bndrepo;version=1.1.2
-	
+-conditionalpackage: \
+	aQute.libg.*,\
+	aQute.lib.*,\
+	aQute.configurable,\
+	aQute.remote.*,\
+	org.osgi.*,\
+	org.yaml.*
+
+-includeresource: \
+	${workspace}/LICENSE, \
+	embedded-repo.jar=${repo;biz.aQute.bnd.embedded-repo;snapshot}, \
+	templates=templates, \
+	@${repo;biz.aQute.bndlib;latest}!/!META-INF/*, \
+	@${repo;biz.aQute.repository;latest}!/!META-INF/*, \
+	@${repo;biz.aQute.resolve;latest}!/!META-INF/*, \
+	@${repo;biz.aQute.bnd.exporters;latest}!/!META-INF/*, \
+	@${repo;biz.aQute.bnd.reporter;latest}!/!META-INF/*, \
+ 	@${repo;biz.aQute.launchpad;latest}!/!META-INF/*, \
+	@${repo;slf4j.api;latest}!/!META-INF/*, \
+	@${repo;slf4j.simple;latest}!/!META-INF/*, \
+	@${repo;jline}!/!META-INF/*
+
+
+Import-Package: org.slf4j, *
 # About the aQute.library.bndrepo dep. Needed to add them here
 # by hand even though they are in bndlib. However, they are added
 # and we can unfortunately not see those packages ...
-	
+Private-Package: \
+    aQute.bnd.ant,\
+    aQute.bnd.enroute.commands,\
+    aQute.bnd.main, \
+	!org.slf4j.impl,\
+	org.slf4j.*
+
+Main-Class:                     aQute.bnd.main.bnd
+JPM-Command:                    bnd
+
+-digests: MD5, SHA1
+
+Bundle-Description: This command line utility is the Swiss army knife of OSGi. It provides you with a breadth \
+ of tools to understand and manage OSGi based systems. This project basically uses bndlib.
+
+-dependson: biz.aQute.bnd.embedded-repo
+
+-buildpath: \
+	osgi.core;version=latest;maven-scope=provided,\
+	org.osgi.service.log;version=latest;maven-scope=provided,\
+	org.osgi.service.repository;version=latest;maven-scope=provided,\
+	aQute.libg;version=project, \
+	biz.aQute.bndlib;version=latest;maven-scope=provided, \
+	biz.aQute.resolve;version=latest;maven-scope=provided, \
+	biz.aQute.repository;version=latest;maven-scope=provided, \
+	biz.aQute.bnd.exporters;version=latest;maven-scope=provided, \
+ 	biz.aQute.bnd.reporter;version=latest;maven-scope=provided,\
+	biz.aQute.bnd.annotation;version=project,\
+	org.apache.ant:ant;version=latest;maven-scope=provided,\
+	biz.aQute.remote.api;version=latest;maven-scope=provided,\
+	org.yaml.snakeyaml;version=latest;maven-scope=provided,\
+	slf4j.api;version=latest;maven-scope=provided,\
+	slf4j.simple;version=latest;maven-scope=provided, \
+	jline;maven-scope=provided, \
+	biz.aQute.launchpad;version=latest;maven-scope=provided
+
+-testpath: \
+	${junit},\
+	org.osgi.namespace.extender;version=latest,\
+	org.apache.felix.framework, \
+	biz.aQute.bnd.embedded-repo; version=snapshot
+
+-builderignore: testdata, testruns, installers

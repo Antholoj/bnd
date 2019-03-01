@@ -11,8 +11,7 @@ package aQute.bnd.properties;
  * This class is not intended to be subclassed.
  * </p>
  * 
- * @since 3.2
- * @noextend This class is not intended to be subclassed by clients.
+ * @since 3.2 @noextend This class is not intended to be subclassed by clients.
  */
 public class CopyOnWriteTextStore implements ITextStore {
 
@@ -24,7 +23,7 @@ public class CopyOnWriteTextStore implements ITextStore {
 	private static class StringTextStore implements ITextStore {
 
 		/** Represents the content of this text store. */
-		private String	fText	= "";	//$NON-NLS-1$
+		private String fText = ""; //$NON-NLS-1$
 
 		/**
 		 * Create an empty text store.
@@ -36,8 +35,7 @@ public class CopyOnWriteTextStore implements ITextStore {
 		/**
 		 * Create a text store with initial content.
 		 * 
-		 * @param text
-		 *            the initial content
+		 * @param text the initial content
 		 */
 		StringTextStore(String text) {
 			super();
@@ -47,6 +45,7 @@ public class CopyOnWriteTextStore implements ITextStore {
 		/*
 		 * @see org.eclipse.jface.text.ITextStore#get(int)
 		 */
+		@Override
 		public char get(int offset) {
 			return fText.charAt(offset);
 		}
@@ -54,6 +53,7 @@ public class CopyOnWriteTextStore implements ITextStore {
 		/*
 		 * @see org.eclipse.jface.text.ITextStore#get(int, int)
 		 */
+		@Override
 		public String get(int offset, int length) {
 			return fText.substring(offset, offset + length);
 		}
@@ -61,6 +61,7 @@ public class CopyOnWriteTextStore implements ITextStore {
 		/*
 		 * @see org.eclipse.jface.text.ITextStore#getLength()
 		 */
+		@Override
 		public int getLength() {
 			return fText.length();
 		}
@@ -69,6 +70,7 @@ public class CopyOnWriteTextStore implements ITextStore {
 		 * @see org.eclipse.jface.text.ITextStore#replace(int, int,
 		 * java.lang.String)
 		 */
+		@Override
 		public void replace(int offset, int length, String text) {
 			// modification not supported
 			throw new UnsupportedOperationException();
@@ -77,6 +79,7 @@ public class CopyOnWriteTextStore implements ITextStore {
 		/*
 		 * @see org.eclipse.jface.text.ITextStore#set(java.lang.String)
 		 */
+		@Override
 		public void set(String text) {
 			fText = text != null ? text : ""; //$NON-NLS-1$
 		}
@@ -93,9 +96,8 @@ public class CopyOnWriteTextStore implements ITextStore {
 	 * Creates an empty text store. The given text store will be used upon first
 	 * modification attempt.
 	 * 
-	 * @param modifiableTextStore
-	 *            a modifiable <code>ITextStore</code> instance, may not be
-	 *            <code>null</code>
+	 * @param modifiableTextStore a modifiable <code>ITextStore</code> instance,
+	 *            may not be <code>null</code>
 	 */
 	public CopyOnWriteTextStore(ITextStore modifiableTextStore) {
 		fTextStore = new StringTextStore();
@@ -105,6 +107,7 @@ public class CopyOnWriteTextStore implements ITextStore {
 	/*
 	 * @see org.eclipse.jface.text.ITextStore#get(int)
 	 */
+	@Override
 	public char get(int offset) {
 		return fTextStore.get(offset);
 	}
@@ -112,6 +115,7 @@ public class CopyOnWriteTextStore implements ITextStore {
 	/*
 	 * @see org.eclipse.jface.text.ITextStore#get(int, int)
 	 */
+	@Override
 	public String get(int offset, int length) {
 		return fTextStore.get(offset, length);
 	}
@@ -119,6 +123,7 @@ public class CopyOnWriteTextStore implements ITextStore {
 	/*
 	 * @see org.eclipse.jface.text.ITextStore#getLength()
 	 */
+	@Override
 	public int getLength() {
 		return fTextStore.getLength();
 	}
@@ -127,6 +132,7 @@ public class CopyOnWriteTextStore implements ITextStore {
 	 * @see org.eclipse.jface.text.ITextStore#replace(int, int,
 	 * java.lang.String)
 	 */
+	@Override
 	public void replace(int offset, int length, String text) {
 		if (fTextStore != fModifiableTextStore) {
 			String content = fTextStore.get(0, fTextStore.getLength());
@@ -139,6 +145,7 @@ public class CopyOnWriteTextStore implements ITextStore {
 	/*
 	 * @see org.eclipse.jface.text.ITextStore#set(java.lang.String)
 	 */
+	@Override
 	public void set(String text) {
 		fTextStore = new StringTextStore(text);
 		fModifiableTextStore.set(""); //$NON-NLS-1$

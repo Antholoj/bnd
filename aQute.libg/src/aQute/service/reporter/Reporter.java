@@ -29,15 +29,13 @@ public interface Reporter extends Report {
 		 * Set the context in the header.
 		 * 
 		 * @param context
-		 * @return
 		 */
 		SetLocation context(String context);
 
 		/**
 		 * Set the method where the error is reported.
 		 * 
-		 * @param context
-		 * @return
+		 * @param methodName
 		 */
 		SetLocation method(String methodName);
 
@@ -51,6 +49,17 @@ public interface Reporter extends Report {
 		 */
 
 		SetLocation reference(String reference);
+
+		/**
+		 * Pass a DTO containing detailed information about the error. This can
+		 * be recognised by other tools (e.g. bndtools) and used for further
+		 * error reporting/fixing.
+		 */
+		SetLocation details(Object details);
+
+		Location location();
+
+		SetLocation length(int length);
 	}
 
 	/**
@@ -58,10 +67,8 @@ public interface Reporter extends Report {
 	 * prevented from garbage collecting. The args must have a proper toString
 	 * method.
 	 * 
-	 * @param format
-	 *            The format of the error
-	 * @param args
-	 *            The arguments of the error
+	 * @param format The format of the error
+	 * @param args The arguments of the error
 	 * @return a SetLocation to set the location
 	 */
 	SetLocation error(String format, Object... args);
@@ -71,10 +78,8 @@ public interface Reporter extends Report {
 	 * prevented from garbage collecting. The args must have a proper toString
 	 * method.
 	 * 
-	 * @param format
-	 *            The format of the error
-	 * @param args
-	 *            The arguments of the error
+	 * @param format The format of the error
+	 * @param args The arguments of the error
 	 * @return a SetLocation to set the location
 	 */
 	SetLocation warning(String format, Object... args);
@@ -84,10 +89,8 @@ public interface Reporter extends Report {
 	 * prevented from garbage collecting. The args must have a proper toString
 	 * method.
 	 * 
-	 * @param format
-	 *            The format of the error
-	 * @param args
-	 *            The arguments of the error
+	 * @param format The format of the error
+	 * @param args The arguments of the error
 	 */
 	void trace(String format, Object... args);
 
@@ -96,26 +99,23 @@ public interface Reporter extends Report {
 	 * prevented from garbage collecting. The args must have a proper toString
 	 * method.
 	 * 
-	 * @param progress
-	 *            A value between 0 and 1 indicating the progress. 0 is starting
-	 *            and >=1 is done.
-	 * @param format
-	 *            The format of the error
-	 * @param args
-	 *            The arguments of the error
-	 * @return a SetLocation to set the location
+	 * @param progress A value between 0 and 1 indicating the progress. 0 is
+	 *            starting and >=1 is done.
+	 * @param format The format of the error
+	 * @param args The arguments of the error
+	 * @deprecated Use SLF4J
+	 *             Logger.info(aQute.libg.slf4j.GradleLogging.LIFECYCLE)
+	 *             instead.
 	 */
+	@Deprecated
 	void progress(float progress, String format, Object... args);
 
 	/**
 	 * Dedicated message for an exception.
 	 * 
-	 * @param t
-	 *            The exception
-	 * @param s
-	 *            The format of the message
-	 * @param args
-	 *            The arguments
+	 * @param t The exception
+	 * @param format The format of the message
+	 * @param args The arguments
 	 */
 	public SetLocation exception(Throwable t, String format, Object... args);
 
