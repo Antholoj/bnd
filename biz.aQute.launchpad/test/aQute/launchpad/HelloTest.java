@@ -14,15 +14,14 @@ import org.osgi.framework.BundleActivator;
 import org.osgi.framework.BundleContext;
 
 import aQute.bnd.build.Workspace;
-import aQute.lib.io.IO;
 
 public class HelloTest {
-	static Workspace		ws;
+	static Workspace	ws;
 	LaunchpadBuilder	builder;
 
 	@BeforeClass
 	public static void beforeClass() throws Exception {
-		ws = Workspace.findWorkspace(IO.work);
+		// ws = Workspace.findWorkspace(IO.work);
 	}
 
 	@Before
@@ -37,7 +36,7 @@ public class HelloTest {
 
 	public static class Hello implements BundleActivator {
 		static Semaphore semaphore = new Semaphore(0);
-		
+
 		@Override
 		public void start(BundleContext context) throws Exception {
 			System.out.println("Hello");
@@ -50,7 +49,7 @@ public class HelloTest {
 			semaphore.release();
 		}
 	}
-	
+
 	@Test
 	public void testActivator() throws Exception {
 		try (Launchpad framework = builder.runfw("org.apache.felix.framework")
@@ -66,5 +65,5 @@ public class HelloTest {
 			assertTrue(Hello.semaphore.tryAcquire());
 		}
 	}
-	
+
 }

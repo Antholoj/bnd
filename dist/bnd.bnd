@@ -10,13 +10,17 @@
             biz.aQute.bnd.testextension, \
             biz.aQute.bnd.exporters, \
             biz.aQute.bnd.reporter, \
+            biz.aQute.bnd.runtime, \
             biz.aQute.bnd.gradle, \
             biz.aQute.bndlib, \
             biz.aQute.bndlib.tests, \
             biz.aQute.bndall.tests, \
             biz.aQute.bndlib.comm.tests, \
+            biz.aQute.http.testservers, \
             biz.aQute.junit, \
             biz.aQute.launcher, \
+            biz.aQute.launchpad, \
+            biz.aQute.launchpad.test, \
             biz.aQute.remote, \
             biz.aQute.repository, \
             biz.aQute.resolve, \

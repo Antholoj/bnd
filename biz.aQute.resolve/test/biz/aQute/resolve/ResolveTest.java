@@ -32,10 +32,6 @@ import aQute.bnd.build.Workspace;
 import aQute.bnd.build.model.BndEditModel;
 import aQute.bnd.build.model.EE;
 import aQute.bnd.build.model.clauses.ExportedPackage;
-import aQute.bnd.build.model.clauses.HeaderClause;
-import aQute.bnd.build.model.conversions.CollectionFormatter;
-import aQute.bnd.build.model.conversions.Converter;
-import aQute.bnd.build.model.conversions.HeaderClauseFormatter;
 import aQute.bnd.header.Parameters;
 import aQute.bnd.http.HttpClient;
 import aQute.bnd.osgi.Domain;
@@ -43,7 +39,10 @@ import aQute.bnd.osgi.Processor;
 import aQute.bnd.osgi.repository.ResourcesRepository;
 import aQute.bnd.osgi.resource.CapReqBuilder;
 import aQute.bnd.osgi.resource.ResourceBuilder;
+import aQute.bnd.osgi.resource.ResourceUtils;
+import aQute.bnd.osgi.resource.ResourceUtils.IdentityCapability;
 import aQute.bnd.repository.osgi.OSGiRepository;
+import aQute.lib.dot.DOT;
 import aQute.lib.io.IO;
 import aQute.libg.reporter.ReporterAdapter;
 import junit.framework.TestCase;
@@ -156,7 +155,7 @@ public class ResolveTest extends TestCase {
 
 	/**
 	 * Test if we can augment
-	 * 
+	 *
 	 * @throws Exception
 	 */
 
@@ -223,7 +222,7 @@ public class ResolveTest extends TestCase {
 
 	/**
 	 * Test minimal setup
-	 * 
+	 *
 	 * @throws URISyntaxException
 	 * @throws MalformedURLException
 	 */
@@ -261,7 +260,7 @@ public class ResolveTest extends TestCase {
 
 	/**
 	 * Test if we can resolve with a distro
-	 * 
+	 *
 	 * @throws ResolutionException
 	 */
 	public void testResolveWithDistro() throws Exception {
@@ -288,6 +287,43 @@ public class ResolveTest extends TestCase {
 			assertNotNull(shell);
 		}
 	}
+
+	/**
+	 * Test if we can resolve with a distro
+	 *
+	 * @throws ResolutionException
+	 */
+	public void testResolveWithLargeDistro() throws Exception {
+
+		MockRegistry registry = new MockRegistry();
+		registry.addPlugin(createRepo(IO.getFile("testdata/repo3.index.xml"), getName()));
+
+		BndEditModel model = new BndEditModel();
+		model.setDistro(Arrays.asList("testdata/release.dxp.distro-7.2.10.jar;version=file"));
+		List<Requirement> requires = new ArrayList<>();
+		CapReqBuilder capReq = CapReqBuilder.createBundleRequirement("org.apache.felix.gogo.shell", "[0,1)");
+		requires.add(capReq.buildSyntheticRequirement());
+
+		model.setRunRequires(requires);
+		BndrunResolveContext context = new BndrunResolveContext(model, registry, log);
+		context.setLevel(0);
+		context.init();
+		try (ResolverLogger logger = new ResolverLogger(4)) {
+			Resolver resolver = new BndResolver(logger);
+
+			Map<Resource, List<Wire>> resolved = resolver.resolve(context);
+			Set<Resource> resources = resolved.keySet();
+			Resource shell = getResource(resources, "org.apache.felix.gogo.shell", "0.10.0");
+			assertNotNull(shell);
+		}
+	}
+
+	// public void testResolveWithLargeDistroRepeated() throws Exception {
+	// for (int i = 0; i < 1000; i++) {
+	// System.out.println("iteration " + i);
+	// testResolveWithLargeDistro();
+	// }
+	// }
 
 	/**
 	 * This is a basic test of resolving. This test is paired with
@@ -423,7 +459,7 @@ public class ResolveTest extends TestCase {
 
 	/**
 	 * Simple test that resolves a requirement
-	 * 
+	 *
 	 * @throws ResolutionException
 	 */
 	public void testMultipleOptionsNotDuplicated() throws Exception {
@@ -476,7 +512,7 @@ public class ResolveTest extends TestCase {
 
 	/**
 	 * Test that latest bundle is selected when namespace is 'osgi.service'
-	 * 
+	 *
 	 * @throws Exception
 	 */
 	public void testLatestBundleServiceNamespace() throws Exception {
@@ -512,9 +548,6 @@ public class ResolveTest extends TestCase {
 		}
 	}
 
-	private static final Converter<String, Collection<? extends HeaderClause>> runbundlesListFormatter = new CollectionFormatter<>(
-		",", new HeaderClauseFormatter(), null, "", "");
-
 	public void testFrameworkFragmentResolve() throws Exception {
 		String wspath = "framework-fragment/";
 		String genWsPath = "generated/tmp/test/" + getName() + "/" + wspath;
@@ -524,7 +557,9 @@ public class ResolveTest extends TestCase {
 
 		File f = IO.getFile(wsRoot, "test.log/fragment.bndrun");
 		try (Workspace ws = new Workspace(wsRoot); Bndrun bndrun = Bndrun.createBndrun(ws, f)) {
-			String runbundles = bndrun.resolve(false, false, runbundlesListFormatter);
+			String runbundles = bndrun.resolve(false, false);
+
+			System.out.println(runbundles);
 			assertThat(bndrun.check()).isTrue();
 			Parameters p = new Parameters(runbundles);
 			assertThat(p.keySet()).hasSize(5)
@@ -532,4 +567,36 @@ public class ResolveTest extends TestCase {
 					"org.apache.felix.gogo.command", "org.apache.felix.gogo.runtime");
 		}
 	}
+
+	public void testResolveWithDependencyOrdering() throws Exception {
+		File f = IO.getFile("testdata/enroute/resolver.bndrun");
+		try (Bndrun bndrun = Bndrun.createBndrun(null, f)) {
+			bndrun.setProperty("-runorder", "leastdependencieslast");
+			String runbundles = bndrun.resolve(false, false);
+			System.out.println(runbundles);
+			assertThat(bndrun.check()).isTrue();
+		}
+	}
+
+	public void testDot() throws Exception {
+		File f = IO.getFile("testdata/enroute/resolver.bndrun");
+		try (Bndrun bndrun = Bndrun.createBndrun(null, f)) {
+			RunResolution resolution = RunResolution.resolve(bndrun, null);
+			assertThat(resolution.exception).isNull();
+
+			Map<Resource, List<Wire>> required = resolution.required;
+			Map<Resource, List<Resource>> resolve = resolution.getGraph(required);
+			assertThat(bndrun.check()).isTrue();
+			DOT<Resource> dot = new DOT<>("test", resolve);
+			int n = 0;
+			Collection<Resource> sortByDependencies = resolution.sortByDependencies(required);
+			for (Resource r : sortByDependencies) {
+				IdentityCapability ic = ResourceUtils.getIdentityCapability(r);
+				dot.name(r, ic.osgi_identity());
+				n++;
+			}
+			System.out.println(dot.render());
+		}
+	}
+
 }

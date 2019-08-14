@@ -17,7 +17,7 @@ import aQute.service.reporter.Reporter;
 
 /**
  * Builds up a request
- * 
+ *
  * @param <T>
  */
 public class HttpRequest<T> {
@@ -38,11 +38,13 @@ public class HttpRequest<T> {
 	Reporter			reporter;
 	File				useCacheFile;
 	boolean				updateTag;
-	int					retries		= 3;
-	long				retryDelay	= 0L;
+	int					retries;
+	long				retryDelay;
 
 	HttpRequest(HttpClient client) {
 		this.client = client;
+		this.retries = client.retries;
+		this.retryDelay = client.retryDelay;
 	}
 
 	/**
@@ -183,10 +185,9 @@ public class HttpRequest<T> {
 		return this;
 	}
 
-	@SuppressWarnings("unchecked")
 	public T go(URL url) throws Exception {
 		this.url = url;
-		return (T) client.send(this);
+		return client.send(this);
 	}
 
 	public T go(URI url) throws Exception {
@@ -198,11 +199,9 @@ public class HttpRequest<T> {
 		return this;
 	}
 
-	@SuppressWarnings("unchecked")
 	public Promise<T> async(URL url) {
 		this.url = url;
-		return client.promiseFactory()
-			.submit(() -> (T) client.send(this));
+		return client.sendAsync(this);
 	}
 
 	public Promise<T> async(URI uri) {

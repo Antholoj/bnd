@@ -28,6 +28,7 @@ import java.util.stream.StreamSupport;
 import org.osgi.resource.Requirement;
 
 import aQute.bnd.build.Project;
+import aQute.bnd.build.Run;
 import aQute.bnd.build.Workspace;
 import aQute.bnd.build.WorkspaceLayout;
 import aQute.bnd.build.model.clauses.ExportedPackage;
@@ -54,6 +55,7 @@ import aQute.bnd.build.model.conversions.SimpleListConverter;
 import aQute.bnd.build.model.conversions.VersionedClauseConverter;
 import aQute.bnd.osgi.Constants;
 import aQute.bnd.osgi.Processor;
+import aQute.bnd.properties.Document;
 import aQute.bnd.properties.IDocument;
 import aQute.bnd.properties.IRegion;
 import aQute.bnd.properties.LineType;
@@ -67,7 +69,7 @@ import aQute.lib.utf8properties.UTF8Properties;
  * A model for a Bnd file. In the first iteration, use a simple Properties
  * object; this will need to be enhanced to additionally record formatting, e.g.
  * line breaks and empty lines, and comments.
- * 
+ *
  * @author Neil Bartlett
  */
 public class BndEditModel {
@@ -80,8 +82,7 @@ public class BndEditModel {
 		Constants.BUNDLE_COPYRIGHT, Constants.BUNDLE_UPDATELOCATION, Constants.BUNDLE_VENDOR,
 		Constants.BUNDLE_CONTACTADDRESS, Constants.BUNDLE_DOCURL, Constants.BUNDLE_SYMBOLICNAME,
 		Constants.BUNDLE_VERSION, Constants.BUNDLE_ACTIVATOR, Constants.EXPORT_PACKAGE, Constants.IMPORT_PACKAGE,
-		Constants.PRIVATE_PACKAGE, Constants.PRIVATEPACKAGE,
-		aQute.bnd.osgi.Constants.SOURCES,
+		Constants.PRIVATE_PACKAGE, Constants.PRIVATEPACKAGE, aQute.bnd.osgi.Constants.SOURCES,
 		aQute.bnd.osgi.Constants.SERVICE_COMPONENT, aQute.bnd.osgi.Constants.CLASSPATH,
 		aQute.bnd.osgi.Constants.BUILDPATH, aQute.bnd.osgi.Constants.RUNBUNDLES, aQute.bnd.osgi.Constants.RUNPROPERTIES,
 		aQute.bnd.osgi.Constants.SUB, aQute.bnd.osgi.Constants.RUNFRAMEWORK, aQute.bnd.osgi.Constants.RUNFW,
@@ -282,6 +283,7 @@ public class BndEditModel {
 	private Converter<String, Collection<? extends String>>			runReposFormatter			= new CollectionFormatter<>(
 		LIST_SEPARATOR, aQute.bnd.osgi.Constants.EMPTY_HEADER);
 	private Workspace												workspace;
+	private IDocument												document;
 
 	// Converter<String, ResolveMode> resolveModeFormatter =
 	// EnumFormatter.create(ResolveMode.class, ResolveMode.manual);
@@ -393,6 +395,13 @@ public class BndEditModel {
 		loadFrom(document);
 	}
 
+	public BndEditModel(Project project) throws IOException {
+		this(project.getWorkspace());
+		this.project = project;
+		this.document = new Document(IO.collect(project.getPropertiesFile()));
+		loadFrom(this.document);
+	}
+
 	public void loadFrom(IDocument document) throws IOException {
 		try (InputStream in = toEscaped(document.get())) {
 			loadFrom(in);
@@ -431,9 +440,9 @@ public class BndEditModel {
 			// Clear and load
 			// The reason we skip standalone workspace properties
 			// as parent is that they are copy of the Run file.
-			// and confuse this edit model when you remove a 
+			// and confuse this edit model when you remove a
 			// property.
-			
+
 			if (this.workspace != null && this.workspace.getLayout() != WorkspaceLayout.STANDALONE) {
 				properties = (Properties) this.workspace.getProperties()
 					.clone();
@@ -696,10 +705,10 @@ public class BndEditModel {
 	public void setPrivatePackages(List<String> newPackages) {
 		List<String> privatePackagesEntries1 = getEntries(Constants.PRIVATEPACKAGE, listConverter);
 		List<String> privatePackagesEntries2 = getEntries(Constants.PRIVATE_PACKAGE, listConverter);
-		
+
 		Set<String> privatePackages = Stream.concat(privatePackagesEntries1.stream(), privatePackagesEntries2.stream())
 			.collect(toSet());
-		
+
 		List<String> addedEntries = disjunction(newPackages, privatePackages);
 		List<String> removedEntries = disjunction(privatePackages, newPackages);
 
@@ -716,7 +725,7 @@ public class BndEditModel {
 		} else {
 			setEntries(privatePackagesEntries2, Constants.PRIVATE_PACKAGE);
 		}
-		
+
 		if (hasPrivatePackageInstruction()) {
 			privatePackagesEntries1.addAll(addedEntries);
 			setEntries(privatePackagesEntries1, Constants.PRIVATEPACKAGE);
@@ -836,12 +845,12 @@ public class BndEditModel {
 		return doGetObject(aQute.bnd.osgi.Constants.TESTPATH, buildPathConverter);
 	}
 
-	public void setBuildPath(List< ? extends VersionedClause> paths) {
+	public void setBuildPath(List<? extends VersionedClause> paths) {
 		List<VersionedClause> oldValue = getBuildPath();
 		doSetObject(aQute.bnd.osgi.Constants.BUILDPATH, oldValue, paths, headerClauseListFormatter);
 	}
 
-	public void setTestPath(List< ? extends VersionedClause> paths) {
+	public void setTestPath(List<? extends VersionedClause> paths) {
 		List<VersionedClause> oldValue = getTestPath();
 		doSetObject(aQute.bnd.osgi.Constants.TESTPATH, oldValue, paths, headerClauseListFormatter);
 	}
@@ -1260,13 +1269,14 @@ public class BndEditModel {
 	 * Return a processor for this model. This processor is based on the parent
 	 * project or the bndrun file. It will contain the properties of the project
 	 * file and the changes from the model.
-	 * 
+	 *
 	 * @return a processor that reflects the actual project or bndrun file setup
+	 * @throws Exception
 	 */
 	public Processor getProperties() throws Exception {
 		Processor parent = null;
 
-		if (isProjectFile() && project != null)
+		if ((isProjectFile() && project != null) || (project instanceof Run))
 			parent = project;
 		else if (getBndResource() != null) {
 			parent = Workspace.getRun(getBndResource());
@@ -1323,5 +1333,24 @@ public class BndEditModel {
 
 	public Map<String, String> getDocumentChanges() {
 		return changesToSave;
+	}
+
+	/**
+	 * If this BndEditModel was created with a project then this method will
+	 * save the changes in the document and will store them in the associated
+	 * file.
+	 *
+	 * @throws IOException
+	 */
+	public void saveChanges() throws IOException {
+		assert document != null
+			&& project != null : "you can only call saveChanges when you created this edit model with a project";
+
+		saveChangesTo(document);
+		store(document, getProject().getPropertiesFile());
+	}
+
+	public static void store(IDocument document, File file) throws IOException {
+		IO.store(document.get(), file);
 	}
 }

@@ -1,9 +1,9 @@
 package aQute.bnd.osgi;
 
-import static aQute.libg.slf4j.GradleLogging.LIFECYCLE;
 import static java.lang.invoke.MethodHandles.publicLookup;
 import static java.lang.invoke.MethodType.methodType;
 import static java.nio.charset.StandardCharsets.UTF_8;
+import static java.util.Objects.requireNonNull;
 import static java.util.stream.Collectors.toList;
 
 import java.io.Closeable;
@@ -53,6 +53,7 @@ import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.Function;
 import java.util.jar.Attributes;
 import java.util.jar.Manifest;
 import java.util.regex.Matcher;
@@ -91,7 +92,7 @@ import aQute.service.reporter.Reporter;
 
 public class Processor extends Domain implements Reporter, Registry, Constants, Closeable {
 	private static final Logger	logger	= LoggerFactory.getLogger(Processor.class);
-	public static Reporter		log;;
+	public static Reporter		log;
 
 	static {
 		ReporterAdapter reporterAdapter = new ReporterAdapter(System.out);
@@ -101,23 +102,24 @@ public class Processor extends Domain implements Reporter, Registry, Constants, 
 		log = reporterAdapter;
 	}
 
-	static final int									BUFFER_SIZE			= IOConstants.PAGE_SIZE * 1;
+	static final int									BUFFER_SIZE	= IOConstants.PAGE_SIZE * 1;
 
-	static Pattern										PACKAGES_IGNORED	= Pattern
-		.compile("(java\\.lang\\.reflect|sun\\.reflect).*");
-
-	static ThreadLocal<Processor>						current				= new ThreadLocal<>();
+	final static ThreadLocal<Processor>					current		= new ThreadLocal<>();
 	private final static ScheduledThreadPoolExecutor	scheduledExecutor;
 	private final static ThreadPoolExecutor				executor;
 	static {
-		ThreadFactory defaultThreadFactory = Executors.defaultThreadFactory();
-		ThreadFactory threadFactory = (Runnable r) -> {
-			Thread t = defaultThreadFactory.newThread(r);
-			t.setName("Bnd-Processor," + t.getName());
-			t.setDaemon(true);
-			return t;
+		Function<String, ThreadFactory> threadFactoryFactory = prefix -> {
+			ThreadFactory defaultThreadFactory = Executors.defaultThreadFactory();
+			return (Runnable r) -> {
+				Thread t = defaultThreadFactory.newThread(r);
+				t.setName(prefix + t.getName());
+				t.setDaemon(true);
+				return t;
+			};
 		};
-		RejectedExecutionHandler handler = (Runnable r, ThreadPoolExecutor e) -> {
+		ThreadFactory executorThreadFactory = threadFactoryFactory.apply("Bnd-Executor,");
+		ThreadFactory scheduledExecutorThreadFactory = threadFactoryFactory.apply("Bnd-ScheduledExecutor,");
+		RejectedExecutionHandler rejectedExecutionHandler = (Runnable r, ThreadPoolExecutor e) -> {
 			if (e.isShutdown()) {
 				return;
 			}
@@ -138,21 +140,25 @@ public class Processor extends Domain implements Reporter, Registry, Constants, 
 				}
 			}
 		};
-		executor = new ThreadPoolExecutor(0, 64, 60L, TimeUnit.SECONDS, new SynchronousQueue<>(), threadFactory,
-			handler);
-		scheduledExecutor = new ScheduledThreadPoolExecutor(4, threadFactory, handler);
+		final int corePoolSize = 2;
+		final int maximumPoolSize = Integer.getInteger("bnd.executor.maximumPoolSize", 256)
+			.intValue();
+		executor = new ThreadPoolExecutor(corePoolSize, maximumPoolSize, 60L, TimeUnit.SECONDS,
+			new SynchronousQueue<>(), executorThreadFactory, rejectedExecutionHandler);
+		scheduledExecutor = new ScheduledThreadPoolExecutor(corePoolSize, scheduledExecutorThreadFactory,
+			rejectedExecutionHandler);
 		scheduledExecutor.setExecuteExistingDelayedTasksAfterShutdownPolicy(false);
 		scheduledExecutor.setContinueExistingPeriodicTasksAfterShutdownPolicy(false);
 
 		// Handle shutting down executors via shutdown hook
 		AtomicBoolean shutdownHookInstalled = new AtomicBoolean();
-		ThreadFactory shutdownHookInstallerThreadFactory = (Runnable r) -> {
+		Function<ThreadFactory, ThreadFactory> shutdownHookInstaller = threadFactory -> (Runnable r) -> {
 			if (shutdownHookInstalled.compareAndSet(false, true)) {
-				executor.setThreadFactory(threadFactory);
-				scheduledExecutor.setThreadFactory(threadFactory);
-				Thread shutdownThread = defaultThreadFactory.newThread(() -> {
+				executor.setThreadFactory(executorThreadFactory);
+				scheduledExecutor.setThreadFactory(scheduledExecutorThreadFactory);
+				Thread shutdownThread = new Thread(() -> {
 					// limit new thread creation
-					executor.setMaximumPoolSize(Math.max(1, executor.getPoolSize()));
+					executor.setMaximumPoolSize(Math.max(corePoolSize, executor.getPoolSize()));
 					scheduledExecutor.shutdown();
 					try {
 						scheduledExecutor.awaitTermination(20, TimeUnit.SECONDS);
@@ -167,8 +173,7 @@ public class Processor extends Domain implements Reporter, Registry, Constants, 
 						Thread.currentThread()
 							.interrupt();
 					}
-				});
-				shutdownThread.setName("Bnd-ExecutorShutdownHook," + shutdownThread.getName());
+				}, "Bnd-ExecutorShutdownHook");
 				try {
 					Runtime.getRuntime()
 						.addShutdownHook(shutdownThread);
@@ -180,12 +185,11 @@ public class Processor extends Domain implements Reporter, Registry, Constants, 
 			}
 			return threadFactory.newThread(r);
 		};
-		executor.setThreadFactory(shutdownHookInstallerThreadFactory);
-		scheduledExecutor.setThreadFactory(shutdownHookInstallerThreadFactory);
+		executor.setThreadFactory(shutdownHookInstaller.apply(executorThreadFactory));
+		scheduledExecutor.setThreadFactory(shutdownHookInstaller.apply(scheduledExecutorThreadFactory));
 	}
-	private static PromiseFactory				promiseFactory	= new PromiseFactory(executor, scheduledExecutor);
+	private static final PromiseFactory			promiseFactory	= new PromiseFactory(executor, scheduledExecutor);
 	static Random								random			= new Random();
-	// TODO handle include files out of date
 	public final static String					LIST_SPLITTER	= "\\s*,\\s*";
 	final List<String>							errors			= new ArrayList<>();
 	final List<String>							warnings		= new ArrayList<>();
@@ -261,6 +265,15 @@ public class Processor extends Domain implements Reporter, Registry, Constants, 
 			properties = new UTF8Properties(props);
 		else
 			properties = props;
+	}
+
+	public Processor(Processor parent, Properties props, boolean copy) {
+		this.parent = parent;
+		properties = copy ? new UTF8Properties(props) : props;
+		for (Entry<Object, Object> entry : parent.getProperties0()
+			.entrySet()) {
+			properties.putIfAbsent(entry.getKey(), entry.getValue());
+		}
 	}
 
 	public void setParent(Processor processor) {
@@ -370,20 +383,18 @@ public class Processor extends Domain implements Reporter, Registry, Constants, 
 	}
 
 	/**
-	 * @deprecated Use SLF4J
-	 *             Logger.info(aQute.libg.slf4j.GradleLogging.LIFECYCLE)
-	 *             instead.
+	 * @deprecated Use SLF4J Logger.info() instead.
 	 */
 	@Override
 	@Deprecated
 	public void progress(float progress, String format, Object... args) {
 		Logger l = getLogger();
-		if (l.isInfoEnabled(LIFECYCLE)) {
+		if (l.isInfoEnabled()) {
 			String message = formatArrays(format, args);
 			if (progress > 0)
-				l.info(LIFECYCLE, "[{}] {}", (int) progress, message);
+				l.info("[{}] {}", (int) progress, message);
 			else
-				l.info(LIFECYCLE, "{}", message);
+				l.info("{}", message);
 		}
 	}
 
@@ -1057,6 +1068,14 @@ public class Processor extends Domain implements Reporter, Registry, Constants, 
 		return getProperty(key, null);
 	}
 
+	public String getUnexpandedProperty(String key) {
+		String raw = getProperties().getProperty(key);
+		if (raw == null && parent != null) {
+			raw = parent.getUnexpandedProperty(key);
+		}
+		return raw;
+	}
+
 	public void mergeProperties(File file, boolean override) {
 		if (file.isFile()) {
 			try {
@@ -1265,7 +1284,7 @@ public class Processor extends Domain implements Reporter, Registry, Constants, 
 			changed |= !file.exists() || updateModified(file.lastModified(), "include file: " + file);
 		}
 
-		profile = getProperty(PROFILE); // Used in property access
+		profile = null; // Used in property access
 
 		if (changed) {
 			forceRefresh();
@@ -1585,8 +1604,10 @@ public class Processor extends Domain implements Reporter, Registry, Constants, 
 
 	private static boolean skipPrint(String key) {
 		switch (key) {
-			case INTERNAL_SOURCE_DIRECTIVE :
 			case INTERNAL_EXPORTED_DIRECTIVE :
+			case INTERNAL_EXPORT_TO_MODULES_DIRECTIVE :
+			case INTERNAL_OPEN_TO_MODULES_DIRECTIVE :
+			case INTERNAL_SOURCE_DIRECTIVE :
 			case NO_IMPORT_DIRECTIVE :
 			case PROVIDE_DIRECTIVE :
 			case SPLIT_PACKAGE_DIRECTIVE :
@@ -1817,14 +1838,14 @@ public class Processor extends Domain implements Reporter, Registry, Constants, 
 
 	public static String removeDuplicateMarker(String key) {
 		int i = key.length() - 1;
-		while (i >= 0 && key.charAt(i) == DUPLICATE_MARKER)
+		while ((i >= 0) && (key.charAt(i) == DUPLICATE_MARKER)) {
 			--i;
-
+		}
 		return key.substring(0, i + 1);
 	}
 
-	public static boolean isDuplicate(String name) {
-		return name.length() > 0 && name.charAt(name.length() - 1) == DUPLICATE_MARKER;
+	public static boolean isDuplicate(String key) {
+		return key.indexOf(DUPLICATE_MARKER, key.length() - 1) >= 0;
 	}
 
 	public void setTrace(boolean x) {
@@ -1838,6 +1859,7 @@ public class Processor extends Domain implements Reporter, Registry, Constants, 
 				.getClassLoader());
 		}
 
+		@Override
 		@Deprecated
 		public URL[] getURLs() {
 			return new URL[0];
@@ -1865,7 +1887,7 @@ public class Processor extends Domain implements Reporter, Registry, Constants, 
 
 	@Override
 	public boolean isOk() {
-		return isFailOk() || (getErrors().size() == 0);
+		return isFailOk() || getErrors().isEmpty();
 	}
 
 	/**
@@ -1986,7 +2008,7 @@ public class Processor extends Domain implements Reporter, Registry, Constants, 
 	}
 
 	public boolean isPerfect() {
-		return getErrors().size() == 0 && getWarnings().size() == 0;
+		return getErrors().isEmpty() && getWarnings().isEmpty();
 	}
 
 	public void setForceLocal(Collection<String> local) {
@@ -2133,14 +2155,16 @@ public class Processor extends Domain implements Reporter, Registry, Constants, 
 		return current().trace;
 	}
 
+	private static final Pattern DURATION_P = Pattern
+		.compile("\\s*(\\d+)\\s*(NANOSECONDS|MICROSECONDS|MILLISECONDS|SECONDS|MINUTES|HOURS|DAYS)?");
+
 	public static long getDuration(String tm, long dflt) {
 		if (tm == null)
 			return dflt;
 
 		tm = tm.toUpperCase();
 		TimeUnit unit = TimeUnit.MILLISECONDS;
-		Matcher m = Pattern.compile("\\s*(\\d+)\\s*(NANOSECONDS|MICROSECONDS|MILLISECONDS|SECONDS|MINUTES|HOURS|DAYS)?")
-			.matcher(tm);
+		Matcher m = DURATION_P.matcher(tm);
 		if (m.matches()) {
 			long duration = Long.parseLong(tm);
 			String u = m.group(2);
@@ -2442,15 +2466,16 @@ public class Processor extends Domain implements Reporter, Registry, Constants, 
 
 	@Override
 	public Location getLocation(String msg) {
+		assert msg != null : "Must provide message";
 		for (Location l : locations)
-			if ((l.message != null) && l.message.equals(msg))
+			if ((l.message != null) && msg.equals(l.message))
 				return l;
 
 		return null;
 	}
 
 	/**
-	 * Get a header relative to this processor, tking its parents and includes
+	 * Get a header relative to this processor, taking its parents and includes
 	 * into account.
 	 *
 	 * @param header
@@ -2479,7 +2504,7 @@ public class Processor extends Domain implements Reporter, Registry, Constants, 
 	}
 
 	public FileLine getHeader(String header, String clause) throws Exception {
-		return getHeader(toFullHeaderPattern(header), clause == null ? null : Pattern.compile(Pattern.quote(clause)));
+		return getHeader(toFullHeaderPattern(header), clause == null ? null : Pattern.compile(clause, Pattern.LITERAL));
 	}
 
 	public FileLine getHeader(Pattern header, Pattern clause) throws Exception {
@@ -2767,6 +2792,7 @@ public class Processor extends Domain implements Reporter, Registry, Constants, 
 	}
 
 	static final String _frangeHelp = "${frange;<version>[;true|false]}";
+
 	/**
 	 * Return a range expression for a filter from a version. By default this is
 	 * based on consumer compatibility. You can specify a third argument (true)
@@ -2894,5 +2920,55 @@ public class Processor extends Domain implements Reporter, Registry, Constants, 
 			allowFail = true;
 		}
 		return system(allowFail, command, null);
+	}
+
+	public String getJavaExecutable(String java) {
+		String path = getProperty(requireNonNull(java));
+		if ((path == null) || path.equals(java)) {
+			return getJavaHomeExecutable(java);
+		}
+		return path;
+	}
+
+	private static String getJavaHomeExecutable(String java) {
+		String command = "bin/" + java;
+		File executable = new File(IO.JAVA_HOME, command);
+		if (executable.exists()) {
+			return IO.absolutePath(executable);
+		}
+		if (IO.JAVA_HOME.getName()
+			.equals("jre")) {
+			executable = new File(IO.JAVA_HOME.getParentFile(), command);
+		}
+		if (executable.exists()) {
+			return IO.absolutePath(executable);
+		}
+		return java;
+	}
+
+	/**
+	 * Return a parameters that contains the merged properties of the given key
+	 * and that is decorated by the merged properties of the key + '+'
+	 *
+	 * @param key The key of the property
+	 */
+
+	public Parameters decorated(String key, boolean literalsIncluded) {
+		Parameters parameters = new Parameters(mergeProperties(key), this);
+		Instructions decorator = new Instructions(mergeProperties(key + "+"));
+		decorator.decorate(parameters, literalsIncluded);
+		return parameters;
+	}
+
+	public Parameters decorated(String key) {
+		return decorated(key, false);
+	}
+
+	public synchronized String getProfile() {
+		if (profile == null) {
+			profile = "cycle";
+			profile = getProperty(Constants.PROFILE);
+		}
+		return profile;
 	}
 }

@@ -1,5 +1,8 @@
 package aQute.bnd.osgi;
 
+import static aQute.bnd.classfile.ClassFile.ACC_ANNOTATION;
+import static aQute.bnd.classfile.ClassFile.ACC_ENUM;
+import static aQute.bnd.classfile.ClassFile.ACC_MODULE;
 import static aQute.bnd.classfile.ConstantPool.CONSTANT_Class;
 import static aQute.bnd.classfile.ConstantPool.CONSTANT_Fieldref;
 import static aQute.bnd.classfile.ConstantPool.CONSTANT_InterfaceMethodref;
@@ -127,7 +130,7 @@ public class Clazz {
 		}
 	}
 
-	public static enum JAVA {
+	public enum JAVA {
 		JDK1_1(45, "JRE-1.1", "(&(osgi.ee=JavaSE)(version=1.1))"), //
 		JDK1_2(46, "J2SE-1.2", "(&(osgi.ee=JavaSE)(version=1.2))"), //
 		JDK1_3(47, "J2SE-1.3", "(&(osgi.ee=JavaSE)(version=1.3))"), //
@@ -161,6 +164,7 @@ public class Clazz {
 		OpenJDK10(54, "JavaSE-10", "(&(osgi.ee=JavaSE)(version=10))"), //
 		OpenJDK11(55, "JavaSE-11", "(&(osgi.ee=JavaSE)(version=11))"), //
 		OpenJDK12(56, "JavaSE-12", "(&(osgi.ee=JavaSE)(version=12))"), //
+		OpenJDK13(57, "JavaSE-13", "(&(osgi.ee=JavaSE)(version=13))"), //
 		UNKNOWN(Integer.MAX_VALUE, "<UNKNOWN>", "(osgi.ee=UNKNOWN)");
 
 		final int		major;
@@ -217,7 +221,7 @@ public class Clazz {
 		}
 	}
 
-	public static enum QUERY {
+	public enum QUERY {
 		IMPLEMENTS,
 		EXTENDS,
 		IMPORTS,
@@ -243,9 +247,6 @@ public class Clazz {
 
 	final static int					ACC_SYNTHETIC	= 0x1000;
 	final static int					ACC_BRIDGE		= 0x0040;
-	final static int					ACC_ANNOTATION	= 0x2000;
-	final static int					ACC_ENUM		= 0x4000;
-	final static int					ACC_MODULE		= 0x8000;
 
 	@Deprecated
 	static protected class Assoc {
@@ -308,7 +309,7 @@ public class Clazz {
 		}
 
 		public boolean isSynthetic() {
-			return (access & ACC_SYNTHETIC) != 0;
+			return Clazz.isSynthetic(access);
 		}
 
 		public boolean isModule() {
@@ -929,7 +930,7 @@ public class Clazz {
 	/**
 	 * Find a method reference in the pool that points to the given class,
 	 * methodname and descriptor.
-	 * 
+	 *
 	 * @param clazz
 	 * @param methodname
 	 * @param descriptor
@@ -1098,6 +1099,9 @@ public class Clazz {
 	}
 
 	private void processSignature(SignatureAttribute attribute, ElementType elementType, int access_flags) {
+		if (isSynthetic(access_flags)) {
+			return; // Ignore generic signatures on synthetic elements
+		}
 		String signature = attribute.signature;
 		Signature sig;
 		switch (elementType) {
@@ -1577,7 +1581,7 @@ public class Clazz {
 
 	/**
 	 * Add a new package reference.
-	 * 
+	 *
 	 * @param packageRef A '.' delimited package name
 	 */
 	private void referTo(TypeRef typeRef, int modifiers) {
@@ -1829,6 +1833,10 @@ public class Clazz {
 
 	public boolean isSynthetic() {
 		return classDef.isSynthetic();
+	}
+
+	static boolean isSynthetic(int access) {
+		return (access & ACC_SYNTHETIC) != 0;
 	}
 
 	public boolean isModule() {

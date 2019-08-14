@@ -6,20 +6,27 @@ import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.Properties;
 import java.util.Set;
 
+import org.apache.maven.artifact.Artifact;
 import org.apache.maven.execution.MavenSession;
 import org.apache.maven.model.Dependency;
+import org.apache.maven.model.Plugin;
 import org.apache.maven.project.MavenProject;
 import org.apache.maven.project.ProjectDependenciesResolver;
+import org.codehaus.plexus.util.xml.Xpp3Dom;
 import org.eclipse.aether.RepositorySystem;
 import org.eclipse.aether.RepositorySystemSession;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import aQute.bnd.build.Run;
 import aQute.bnd.build.Workspace;
+import aQute.bnd.build.model.EE;
 import aQute.bnd.maven.lib.configuration.BeanProperties;
+import aQute.bnd.osgi.Constants;
 import aQute.bnd.osgi.Processor;
 import aQute.bnd.repository.fileset.FileSetRepository;
 import aQute.bnd.service.RepositoryPlugin;
@@ -174,14 +181,16 @@ public class BndrunContainer {
 		try (Bndrun run = Bndrun.createBndrun(null, runFile)) {
 			run.setBase(temporaryDir);
 			Workspace workspace = run.getWorkspace();
-			workspace.setParent(getProcessor());
 			workspace.setBuildDir(cnf);
 			workspace.setOffline(session.getSettings()
 				.isOffline());
 			workspace.addBasicPlugin(getFileSetRepository());
+			run.setParent(getProcessor(workspace));
 			for (RepositoryPlugin repo : workspace.getRepositories()) {
 				repo.list(null);
 			}
+			setRunrequiresFromProjectArtifact(run);
+			setEEfromBuild(run);
 			run.getInfo(workspace);
 			int errors = report(run);
 			if (!run.isOk()) {
@@ -209,13 +218,46 @@ public class BndrunContainer {
 		return fileSetRepository = dependencyResolver.getFileSetRepository(name, bundles, useMavenDependencies);
 	}
 
+	public void setRunrequiresFromProjectArtifact(Run run) {
+		String runrequires = run.getProperty(Constants.RUNREQUIRES);
+
+		if (runrequires == null && ("jar".equals(project.getPackaging()) || "war".equals(project.getPackaging()))
+			&& (project.getPlugin("biz.aQute.bnd:bnd-maven-plugin") != null)) {
+
+			Artifact artifact = project.getArtifact();
+
+			run.setProperty(Constants.RUNREQUIRES,
+				String.format("osgi.identity;filter:='(osgi.identity=%s)'", artifact.getArtifactId()));
+
+			logger.info("Bnd inferred {}: {}", Constants.RUNREQUIRES, run.getProperty(Constants.RUNREQUIRES));
+		}
+	}
+
+	public void setEEfromBuild(Run run) {
+		String runee = run.getProperty(Constants.RUNEE);
+
+		if (runee == null) {
+			Optional.ofNullable(project.getPlugin("org.apache.maven.plugins:maven-compiler-plugin"))
+				.map(Plugin::getConfiguration)
+				.map(Xpp3Dom.class::cast)
+				.map(dom -> dom.getChild("target"))
+				.map(Xpp3Dom::getValue)
+				.flatMap(EE::highestFromTargetVersion)
+				.ifPresent(ee -> {
+					run.setProperty(Constants.RUNEE, ee.getEEName());
+
+					logger.info("Bnd inferred {}: {}", Constants.RUNEE, run.getProperty(Constants.RUNEE));
+				});
+		}
+	}
+
 	private String getNamePart(File runFile) {
 		String nameExt = runFile.getName();
 		int pos = nameExt.lastIndexOf('.');
 		return (pos > 0) ? nameExt.substring(0, pos) : nameExt;
 	}
 
-	private Processor getProcessor() {
+	private Processor getProcessor(Workspace workspace) {
 		if (processor != null) {
 			return processor;
 		}
@@ -225,7 +267,7 @@ public class BndrunContainer {
 		beanProperties.put("settings", session.getSettings());
 		Properties mavenProperties = new Properties(beanProperties);
 		mavenProperties.putAll(project.getProperties());
-		return processor = new Processor(mavenProperties, false);
+		return processor = new Processor(workspace, mavenProperties, false);
 	}
 
 	@SuppressWarnings("deprecation")

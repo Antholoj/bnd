@@ -1,5 +1,7 @@
 package aQute.bnd.osgi;
 
+import static java.util.stream.Collectors.toList;
+
 import java.io.File;
 import java.io.FileFilter;
 import java.io.FileNotFoundException;
@@ -42,6 +44,9 @@ import aQute.bnd.maven.PomResource;
 import aQute.bnd.metatype.MetatypeAnnotations;
 import aQute.bnd.osgi.Descriptors.PackageRef;
 import aQute.bnd.osgi.Descriptors.TypeRef;
+import aQute.bnd.plugin.jpms.JPMSAnnotations;
+import aQute.bnd.plugin.jpms.JPMSModuleInfoPlugin;
+import aQute.bnd.plugin.spi.SPIDescriptorGenerator;
 import aQute.bnd.service.SignerPlugin;
 import aQute.bnd.service.diff.Delta;
 import aQute.bnd.service.diff.Diff;
@@ -52,6 +57,7 @@ import aQute.bnd.version.Version;
 import aQute.lib.collections.MultiMap;
 import aQute.lib.hex.Hex;
 import aQute.lib.io.IO;
+import aQute.lib.regex.PatternConstants;
 import aQute.lib.strings.Strings;
 import aQute.libg.generics.Create;
 
@@ -62,7 +68,7 @@ import aQute.libg.generics.Create;
  */
 public class Builder extends Analyzer {
 	private final static Logger		logger						= LoggerFactory.getLogger(Builder.class);
-	static Pattern					IR_PATTERN					= Pattern.compile("[{]?-?@?(?:[^=]+=)?\\s*([^}!]+).*");
+	private final static Pattern	IR_PATTERN					= Pattern.compile("[{]?-?@?(?:[^=]+=)?\\s*([^}!]+).*");
 	private final DiffPluginImpl	differ						= new DiffPluginImpl();
 	private Pattern					xdoNotCopy					= null;
 	private static final int		SPLIT_MERGE_LAST			= 1;
@@ -135,8 +141,8 @@ public class Builder extends Analyzer {
 		if (!isNoBundle())
 			doVerify(dot);
 
-		if (dot.getResources()
-			.isEmpty())
+		Map<String, Resource> resources = dot.getResources();
+		if (resources.isEmpty() || ((resources.size() == 1) && resources.get("module-info.class") != null))
 			warning(
 				"The JAR is empty: The instructions for the JAR named %s did not cause any content to be included, this is likely wrong",
 				getBsn());
@@ -210,7 +216,7 @@ public class Builder extends Analyzer {
 
 	/**
 	 * Check if we need to calculate any checksums.
-	 * 
+	 *
 	 * @param dot
 	 * @throws Exception
 	 */
@@ -233,16 +239,16 @@ public class Builder extends Analyzer {
 
 		// Check if we have sensible setup
 
-		if (getClasspath().size() == 0 && (getProperty(EXPORT_PACKAGE) != null || getProperty(EXPORT_PACKAGE) != null
-			|| getProperty(PRIVATE_PACKAGE) != null || getProperty(PRIVATEPACKAGE) != null))
-			warning("Classpath is empty. " + Constants.PRIVATE_PACKAGE + " (-privatepackage) and " + EXPORT_PACKAGE
-				+ " can only expand from the classpath when there is one");
+		if (getClasspath().isEmpty() && (getProperty(EXPORT_PACKAGE) != null || getProperty(PRIVATE_PACKAGE) != null
+			|| getProperty(PRIVATEPACKAGE) != null))
+			warning("Classpath is empty. " + Constants.PRIVATE_PACKAGE + ", " + Constants.PRIVATEPACKAGE + ", and "
+				+ EXPORT_PACKAGE + " can only expand from the classpath when there is one");
 
 	}
 
 	/**
 	 * Turn this normal bundle in a web and add any resources.
-	 * 
+	 *
 	 * @throws Exception
 	 */
 	private Jar doWab(Jar dot) throws Exception {
@@ -254,15 +260,17 @@ public class Builder extends Analyzer {
 		logger.debug("wab {} {}", wab, wablib);
 		setBundleClasspath(append("WEB-INF/classes", getProperty(BUNDLE_CLASSPATH)));
 
-		Set<String> paths = new HashSet<>(dot.getResources()
-			.keySet());
-
-		for (String path : paths) {
-			if (path.indexOf('/') > 0 && !Character.isUpperCase(path.charAt(0))) {
+		dot.getResources()
+			.keySet()
+			.stream()
+			.filter(path -> !pathStartsWith(path, "WEB-INF") && Arrays.stream(Constants.METAPACKAGES)
+				.noneMatch(meta -> pathStartsWith(path, meta)))
+			// we collect since we need to mutate the source set
+			.collect(toList())
+			.forEach(path -> {
 				logger.debug("wab: moving: {}", path);
 				dot.rename(path, "WEB-INF/classes/" + path);
-			}
-		}
+			});
 
 		Parameters clauses = parseHeader(getProperty(WABLIB));
 		for (Map.Entry<String, Attrs> entry : clauses.entrySet()) {
@@ -273,9 +281,13 @@ public class Builder extends Analyzer {
 		return dot;
 	}
 
+	private static boolean pathStartsWith(String path, String prefix) {
+		return path.startsWith(prefix) && ((path.length() == prefix.length()) || (path.charAt(prefix.length()) == '/'));
+	}
+
 	/**
 	 * Add a wab lib to the jar.
-	 * 
+	 *
 	 * @param f
 	 */
 	private void addWabLib(Jar dot, File f, String name, Map<String, String> attrs) throws Exception {
@@ -315,7 +327,7 @@ public class Builder extends Analyzer {
 
 	/**
 	 * Get the manifest and write it out separately if -savemanifest is set
-	 * 
+	 *
 	 * @param dot
 	 */
 	private void doSaveManifest(Jar dot) throws Exception {
@@ -640,7 +652,7 @@ public class Builder extends Analyzer {
 	/**
 	 * Destructively filter the packages from the build up index. This index is
 	 * used by the Export Package as well as the Private Package
-	 * 
+	 *
 	 * @param jar
 	 * @param name
 	 * @param instructions
@@ -726,7 +738,7 @@ public class Builder extends Analyzer {
 
 	/**
 	 * Copy the package from the providers based on the split package strategy.
-	 * 
+	 *
 	 * @param dest
 	 * @param providers
 	 * @param directory
@@ -766,7 +778,7 @@ public class Builder extends Analyzer {
 
 	/**
 	 * Cop
-	 * 
+	 *
 	 * @param dest
 	 * @param srce
 	 * @param path
@@ -799,10 +811,7 @@ public class Builder extends Analyzer {
 
 	/**
 	 * Analyze the classpath for a split package
-	 * 
-	 * @param pack
-	 * @param classpath
-	 * @param source
+	 *
 	 */
 	private String diagnostic(String pack, List<Jar> culprits) {
 		// Default is like merge-first, but with a warning
@@ -834,7 +843,7 @@ public class Builder extends Analyzer {
 
 	/**
 	 * Matches the instructions against a package.
-	 * 
+	 *
 	 * @param instructions The list of instructions
 	 * @param pack The name of the package
 	 * @param unused The total list of patterns, matched patterns are removed
@@ -872,7 +881,7 @@ public class Builder extends Analyzer {
 	/**
 	 * Parse the Bundle-Includes header. Files in the bundles Include header are
 	 * included in the jar. The source can be a directory or a file.
-	 * 
+	 *
 	 * @throws IOException
 	 * @throws FileNotFoundException
 	 */
@@ -1036,7 +1045,7 @@ public class Builder extends Analyzer {
 	 * source is used as the only item. If the destination contains a macro,
 	 * each iteration will create a new file, otherwise the destination name is
 	 * used.
-	 * 
+	 *
 	 * @param jar
 	 * @param source
 	 * @param destination
@@ -1138,7 +1147,7 @@ public class Builder extends Analyzer {
 
 	/**
 	 * Check if a file or directory is older than the given time.
-	 * 
+	 *
 	 * @param file
 	 * @param lastModified
 	 */
@@ -1221,15 +1230,20 @@ public class Builder extends Analyzer {
 		List<Jar> src = getJarsFromName(source, Constants.INCLUDE_RESOURCE + " " + source);
 		if (!src.isEmpty()) {
 			for (Jar j : src) {
-				String quoted = j.getSource() != null ? j.getSource()
-					.getName() : j.getName();
-				// Do not touch the manifest so this also
-				// works for signed files.
-				j.setDoNotTouchManifest();
-				JarResource jarResource = new JarResource(j);
+				File sourceFile = j.getSource();
+				String quoted = (sourceFile != null) ? sourceFile.getName() : j.getName();
+				Resource resource;
+				if ((sourceFile != null) && sourceFile.isFile()) {
+					resource = new FileResource(sourceFile);
+				} else {
+					// Do not touch the manifest so this also
+					// works for signed files.
+					j.setDoNotTouchManifest();
+					resource = new JarResource(j);
+				}
 				String path = destinationPath.replace(source, quoted);
 				logger.debug("copy d={} s={} path={}", jar, j, path);
-				copy(jar, path, jarResource, extra);
+				copy(jar, path, resource, extra);
 			}
 		} else {
 			Resource lastChance = make.process(source);
@@ -1247,7 +1261,7 @@ public class Builder extends Analyzer {
 	/**
 	 * Extra resources from a Jar and add them to the given jar. The clause is
 	 * the
-	 * 
+	 *
 	 * @param jar
 	 * @param clauses
 	 * @param i
@@ -1280,7 +1294,7 @@ public class Builder extends Analyzer {
 
 	/**
 	 * Add all the resources in the given jar that match the given filter.
-	 * 
+	 *
 	 * @param sub the jar
 	 * @param filter a pattern that should match the resoures in sub to be added
 	 */
@@ -1290,7 +1304,7 @@ public class Builder extends Analyzer {
 
 	/**
 	 * Add all the resources in the given jar that match the given filter.
-	 * 
+	 *
 	 * @param sub the jar
 	 * @param filter a pattern that should match the resoures in sub to be added
 	 */
@@ -1365,7 +1379,7 @@ public class Builder extends Analyzer {
 	/**
 	 * Build Multiple jars. If the -sub command is set, we filter the file with
 	 * the given patterns.
-	 * 
+	 *
 	 * @throws Exception
 	 */
 	public Jar[] builds() throws Exception {
@@ -1432,7 +1446,7 @@ public class Builder extends Analyzer {
 	 * be created artifacts and are each scoped to such an artifacts. The
 	 * builders can be used to build the bundles or they can be used to find out
 	 * information about the to be generated bundles.
-	 * 
+	 *
 	 * @return List of 0..n builders representing artifacts.
 	 * @throws Exception
 	 */
@@ -1606,7 +1620,7 @@ public class Builder extends Analyzer {
 	 * Answer the string of the resource that it has in the container. It is
 	 * possible that the resource is a classpath entry. In that case an empty
 	 * string is returned.
-	 * 
+	 *
 	 * @param resource The resource to look for
 	 * @return A suffix on the classpath or "" if the resource is a class path
 	 *         entry
@@ -1678,12 +1692,15 @@ public class Builder extends Analyzer {
 	/**
 	 */
 
-	static MakeBnd				makeBnd				= new MakeBnd();
-	static MakeCopy				makeCopy			= new MakeCopy();
-	static ServiceComponent		serviceComponent	= new ServiceComponent();
-	static CDIAnnotations		cdiAnnotations		= new CDIAnnotations();
-	static DSAnnotations		dsAnnotations		= new DSAnnotations();
-	static MetatypeAnnotations	metatypeAnnotations	= new MetatypeAnnotations();
+	static MakeBnd					makeBnd					= new MakeBnd();
+	static MakeCopy					makeCopy				= new MakeCopy();
+	static ServiceComponent			serviceComponent		= new ServiceComponent();
+	static CDIAnnotations			cdiAnnotations			= new CDIAnnotations();
+	static DSAnnotations			dsAnnotations			= new DSAnnotations();
+	static MetatypeAnnotations		metatypeAnnotations		= new MetatypeAnnotations();
+	static JPMSAnnotations			moduleAnnotations		= new JPMSAnnotations();
+	static JPMSModuleInfoPlugin		moduleInfoPlugin		= new JPMSModuleInfoPlugin();
+	static SPIDescriptorGenerator	spiDescriptorGenerator	= new SPIDescriptorGenerator();
 
 	@Override
 	protected void setTypeSpecificPlugins(Set<Object> list) {
@@ -1693,12 +1710,15 @@ public class Builder extends Analyzer {
 		list.add(cdiAnnotations);
 		list.add(dsAnnotations);
 		list.add(metatypeAnnotations);
+		list.add(moduleAnnotations);
+		list.add(moduleInfoPlugin);
+		list.add(spiDescriptorGenerator);
 		super.setTypeSpecificPlugins(list);
 	}
 
 	/**
 	 * Diff this bundle to another bundle for the given packages.
-	 * 
+	 *
 	 * @throws Exception
 	 */
 
@@ -1764,7 +1784,7 @@ public class Builder extends Analyzer {
 
 	/**
 	 * Show the diff recursively
-	 * 
+	 *
 	 * @param p
 	 * @param i
 	 */
@@ -1802,7 +1822,7 @@ public class Builder extends Analyzer {
 	/**
 	 * Base line against a previous version. Should be overridden in the
 	 * ProjectBuilder where we have access to the repos
-	 * 
+	 *
 	 * @throws Exception
 	 */
 
@@ -1813,9 +1833,9 @@ public class Builder extends Analyzer {
 	 * a .git/HEAD file, going up in the file hierarchy. Then get this file, and
 	 * resolve any symbolic reference.
 	 */
-	static Pattern	GITREF_P		= Pattern.compile("ref:\\s*(refs/(heads|tags|remotes)/([^\\s]+))\\s*");
+	private final static Pattern	GITREF_P		= Pattern.compile("ref:\\s*(refs/(heads|tags|remotes)/(\\S+))\\s*");
 
-	static String	_githeadHelp	= "${githead}, provide the SHA for the current git head";
+	final static String				_githeadHelp	= "${githead}, provide the SHA for the current git head";
 
 	public String _githead(String[] args) throws IOException {
 		Macro.verifyCommand(args, _githeadHelp, null, 1, 1);
@@ -1849,7 +1869,7 @@ public class Builder extends Analyzer {
 							if (file.isFile()) {
 								String refs = IO.collect(file);
 								Pattern packedReferenceLinePattern = Pattern
-									.compile("([a-fA-F0-9]{40,40})\\s+" + reference + "\\s*\n");
+									.compile("(" + PatternConstants.SHA1 + ")\\s+" + reference + "\\s*\n");
 								Matcher packedReferenceMatcher = packedReferenceLinePattern.matcher(refs);
 								if (packedReferenceMatcher.find()) {
 									head = packedReferenceMatcher.group(1);
@@ -1877,7 +1897,7 @@ public class Builder extends Analyzer {
 
 	/**
 	 * Create a report of the settings
-	 * 
+	 *
 	 * @throws Exception
 	 */
 
@@ -1893,7 +1913,7 @@ public class Builder extends Analyzer {
 
 	/**
 	 * Collect the information from the {@link BuilderSpecification}
-	 * 
+	 *
 	 * @throws IOException
 	 */
 
@@ -1904,7 +1924,7 @@ public class Builder extends Analyzer {
 		setFailOk(spec.failOk);
 		setSources(spec.sources);
 		setProperty(Constants.RESOURCEONLY, spec.resourceOnly + "");
-		
+
 		if (!spec.bundleNativeCode.isEmpty())
 			setProperty(Constants.BUNDLE_NATIVECODE, new Parameters(spec.bundleNativeCode).toString());
 
@@ -1938,7 +1958,7 @@ public class Builder extends Analyzer {
 		if (!spec.includeresource.isEmpty()) {
 			setProperty(Constants.INCLUDE_RESOURCE, new Parameters(spec.includeresource).toString());
 		}
-		
+
 		if (!spec.privatePackage.isEmpty()) {
 			setProperty(Constants.PRIVATEPACKAGE, new Parameters(spec.privatePackage).toString());
 		}

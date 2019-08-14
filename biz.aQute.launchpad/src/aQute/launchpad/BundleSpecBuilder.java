@@ -1,29 +1,34 @@
 package aQute.launchpad;
 
+import static aQute.bnd.service.specifications.BuilderSpecification.PROJECT;
+import static aQute.bnd.service.specifications.BuilderSpecification.WORKSPACE;
+
 import java.io.ByteArrayInputStream;
 import java.io.File;
 import java.net.URL;
 import java.nio.file.Files;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.regex.Pattern;
-import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 import org.osgi.framework.Bundle;
 import org.osgi.framework.BundleActivator;
 import org.osgi.framework.Version;
 
+import aQute.bnd.service.specifications.BuilderSpecification;
 import aQute.lib.exceptions.Exceptions;
 import aQute.lib.io.IO;
+import aQute.lib.regex.PatternConstants;
+import aQute.lib.strings.Strings;
 
 /**
  * Provides all builder functions. Specified as default methods so that we can
  * create sub builder interfaces that inherit all functions of the outer one.
- * 
  */
 public interface BundleSpecBuilder {
-	final static String		CONFIGURATION_JSON	= "configuration/configuration.json";
-	final static Pattern	SYMBOLICNAME		= Pattern.compile("[a-zA-Z0-9_-]+(\\.[a-zA-Z0-9_-]+)*");
+	String	CONFIGURATION_JSON	= "configuration/configuration.json";
+	Pattern	SYMBOLICNAME		= Pattern.compile(PatternConstants.SYMBOLICNAME);
 
 	BundleBuilder x();
 
@@ -49,6 +54,7 @@ public interface BundleSpecBuilder {
 				return x;
 			}
 
+			@Override
 			public String bsn() {
 				return name;
 			}
@@ -59,9 +65,11 @@ public interface BundleSpecBuilder {
 	 * The values for a Fragment Attachment directive
 	 */
 	enum FragmentAttachment {
-		always("always"), never("never"), resolve_time("resolve-time");
+		always("always"),
+		never("never"),
+		resolve_time("resolve-time");
 
-		public final String value;
+		String value;
 
 		FragmentAttachment(String name) {
 			this.value = name;
@@ -83,9 +91,8 @@ public interface BundleSpecBuilder {
 
 		/**
 		 * Set the bundle's fragment attachment policy
-		 * 
-		 * @param attachment
-		 *            the attachment policy
+		 *
+		 * @param attachment the attachment policy
 		 */
 		default BundleSpecBsn fragmentAttachment(FragmentAttachment attachment) {
 			directive("fragment-attachment", attachment.value);
@@ -94,23 +101,20 @@ public interface BundleSpecBuilder {
 
 		/**
 		 * Set the mandatory matching attributes
-		 * 
-		 * @param attributes
-		 *            the matching attributes
+		 *
+		 * @param attributes the matching attributes
 		 */
 		default BundleSpecBsn mandatory(String... attributes) {
 			directive("mandatory", Stream.of(attributes)
-					.collect(Collectors.joining(",")));
+				.collect(Strings.joining()));
 			return this;
 		}
 
 		/**
 		 * Bundle-SymbolicName attribute
-		 * 
-		 * @param key
-		 *            the attribute name
-		 * @param value
-		 *            the value
+		 *
+		 * @param key the attribute name
+		 * @param value the value
 		 */
 		default BundleSpecBsn attribute(String key, String value) {
 			x().add("Bundle-SymbolicName", x().spec.bundleSymbolicName, bsn(), key, value);
@@ -119,11 +123,9 @@ public interface BundleSpecBuilder {
 
 		/**
 		 * Bundle-SymbolicName directive
-		 * 
-		 * @param key
-		 *            the directive name (no ':' at end)
-		 * @param value
-		 *            the value
+		 *
+		 * @param key the directive name (no ':' at end)
+		 * @param value the value
 		 */
 		default BundleSpecBsn directive(String key, String value) {
 			attribute(key + ":", value);
@@ -167,9 +169,9 @@ public interface BundleSpecBuilder {
 	 * as an activator. The class is also added as a resource so that it could
 	 * potentially also be a DS component. However, this resource is only used
 	 * by bnd since in runtime we will load the class from the classpath.
-	 * 
-	 * @param bundleActivator
-	 *            the class that is intended to be the Bundle Activator
+	 *
+	 * @param bundleActivator the class that is intended to be the Bundle
+	 *            Activator
 	 */
 	default BundleSpecBuilder bundleActivator(Class<? extends BundleActivator> bundleActivator) {
 		this.bundleActivator(bundleActivator.getName());
@@ -187,7 +189,7 @@ public interface BundleSpecBuilder {
 
 		if (x.spec.fragmentHost.size() > 1)
 			throw new IllegalArgumentException(
-					"Only one Fragment-Host can be specified. The previous one was " + x.spec.fragmentHost);
+				"Only one Fragment-Host can be specified. The previous one was " + x.spec.fragmentHost);
 
 		return new BundleSpecFragmentHost() {
 
@@ -202,6 +204,7 @@ public interface BundleSpecBuilder {
 			/*
 			 * access to the current fragmenthost
 			 */
+			@Override
 			public String fragmenthost() {
 				return name;
 			}
@@ -213,16 +216,16 @@ public interface BundleSpecBuilder {
 	 * Extension options for the Fragment-Host
 	 */
 	enum Extension {
-		framework, bootclasspath
+		framework,
+		bootclasspath
 	}
 
 	interface BundleSpecFragmentHost extends BundleSpecBuilder {
 
 		/**
 		 * extension
-		 * 
-		 * @param extension
-		 *            the actual extension type
+		 *
+		 * @param extension the actual extension type
 		 */
 		default BundleSpecBuilder extension(Extension extension) {
 			directive("extension", extension.toString());
@@ -231,10 +234,10 @@ public interface BundleSpecBuilder {
 
 		/**
 		 * The Fragment-Host bundle-version attribute
-		 * 
-		 * @param versionRange
-		 *            the range of version for the fragment host
+		 *
+		 * @param versionRange the range of version for the fragment host
 		 */
+		@Override
 		default BundleSpecFragmentHost bundleVersion(String versionRange) {
 			attribute("bundle-version", versionRange);
 			return this;
@@ -242,11 +245,9 @@ public interface BundleSpecBuilder {
 
 		/**
 		 * Fragment-Host attribute
-		 * 
-		 * @param key
-		 *            the attribute name
-		 * @param value
-		 *            the attribute value
+		 *
+		 * @param key the attribute name
+		 * @param value the attribute value
 		 */
 		default BundleSpecFragmentHost attribute(String key, String value) {
 			x().add("Fragment-Host", x().spec.fragmentHost, fragmenthost(), key, value);
@@ -255,11 +256,9 @@ public interface BundleSpecBuilder {
 
 		/**
 		 * Fragment-Host directive
-		 * 
-		 * @param key
-		 *            the directive name without the ':'
-		 * @param value
-		 *            the directive value
+		 *
+		 * @param key the directive name without the ':'
+		 * @param value the directive value
 		 */
 		default BundleSpecFragmentHost directive(String key, String value) {
 			attribute(key + ":", value);
@@ -323,10 +322,10 @@ public interface BundleSpecBuilder {
 
 		/**
 		 * Require-Bundle bundleVersion attribute
-		 * 
-		 * @param versionRange
-		 *            the version range of the required bundles
+		 *
+		 * @param versionRange the version range of the required bundles
 		 */
+		@Override
 		default BundleSpecBuilderRequireBundle bundleVersion(String versionRange) {
 			attribute("bundle-version", versionRange);
 			return this;
@@ -334,11 +333,9 @@ public interface BundleSpecBuilder {
 
 		/**
 		 * Require-Bundle attribute
-		 * 
-		 * @param key
-		 *            the name of the attribute
-		 * @param value
-		 *            the value of the attribute
+		 *
+		 * @param key the name of the attribute
+		 * @param value the value of the attribute
 		 */
 		default BundleSpecBuilderRequireBundle attribute(String key, String value) {
 			x().add("Require-Bundle ", x().spec.requireBundle, requirebundle(), key, value);
@@ -347,11 +344,9 @@ public interface BundleSpecBuilder {
 
 		/**
 		 * Require-Bundle directive
-		 * 
-		 * @param key
-		 *            the name of the directive (without the ':')
-		 * @param value
-		 *            the value of the directive
+		 *
+		 * @param key the name of the directive (without the ':')
+		 * @param value the value of the directive
 		 */
 		default BundleSpecBuilderRequireBundle directive(String key, String value) {
 			attribute(key + ":", value);
@@ -366,9 +361,8 @@ public interface BundleSpecBuilder {
 
 	/**
 	 * Import-Package
-	 * 
-	 * @param name
-	 *            name of the package to be imported, may contain wildcards
+	 *
+	 * @param name name of the package to be imported, may contain wildcards
 	 */
 
 	default BundleSpecImportPackage importPackage(String packageName) {
@@ -410,9 +404,8 @@ public interface BundleSpecBuilder {
 
 		/**
 		 * Set the package version attribute
-		 * 
-		 * @param versionRange
-		 *            the version range of the required package
+		 *
+		 * @param versionRange the version range of the required package
 		 */
 		default BundleSpecImportPackage version(String versionRange) {
 			attribute("version", versionRange);
@@ -421,9 +414,8 @@ public interface BundleSpecBuilder {
 
 		/**
 		 * Set the import from specific bundle attribute
-		 * 
-		 * @param bundleSymbolicName
-		 *            the bundle to import the package from
+		 *
+		 * @param bundleSymbolicName the bundle to import the package from
 		 */
 		default BundleSpecImportPackage bundle_symbolic_name(String bundleSymbolicName) {
 			attribute("bundle-symbolic-name", bundleSymbolicName);
@@ -432,9 +424,8 @@ public interface BundleSpecBuilder {
 
 		/**
 		 * Set the import from specific bundle version attribute
-		 * 
-		 * @param versionRange
-		 *            the version range of the required package
+		 *
+		 * @param versionRange the version range of the required package
 		 */
 		default BundleSpecImportPackage bundle_version(String versionRange) {
 			attribute("bundle-version", versionRange);
@@ -443,11 +434,9 @@ public interface BundleSpecBuilder {
 
 		/**
 		 * The Import-Package attribute
-		 * 
-		 * @param key
-		 *            the name of the attribute
-		 * @param value
-		 *            the value of the attribute
+		 *
+		 * @param key the name of the attribute
+		 * @param value the value of the attribute
 		 */
 		default BundleSpecImportPackage attribute(String key, String value) {
 			x().add("Import-Package", x().spec.importPackage, packageName(), key, value);
@@ -456,11 +445,9 @@ public interface BundleSpecBuilder {
 
 		/**
 		 * The Import-Package directive
-		 * 
-		 * @param key
-		 *            the name of the directive (without the ':')
-		 * @param value
-		 *            the value of the directive
+		 *
+		 * @param key the name of the directive (without the ':')
+		 * @param value the value of the directive
 		 */
 		default BundleSpecImportPackage directive(String key, String value) {
 			attribute(key + ":", value);
@@ -510,9 +497,8 @@ public interface BundleSpecBuilder {
 
 		/**
 		 * Set the uses directive
-		 * 
-		 * @param packageNames
-		 *            packages used by the current export package
+		 *
+		 * @param packageNames packages used by the current export package
 		 */
 		default BundleSpecExportPackage uses(String... packageNames) {
 			directive("uses", x().join(packageNames));
@@ -521,9 +507,8 @@ public interface BundleSpecBuilder {
 
 		/**
 		 * Set the mandatory attributes
-		 * 
-		 * @param attributeNames
-		 *            the mandatory attribute names
+		 *
+		 * @param attributeNames the mandatory attribute names
 		 */
 		default BundleSpecExportPackage mandatory(String... attributeNames) {
 			directive("mandatory", x().join(attributeNames));
@@ -532,9 +517,8 @@ public interface BundleSpecBuilder {
 
 		/**
 		 * Set included classes
-		 * 
-		 * @param classNames
-		 *            the included class names
+		 *
+		 * @param classNames the included class names
 		 */
 		default BundleSpecExportPackage include(String... classNames) {
 			directive("include", x().join(classNames));
@@ -543,12 +527,13 @@ public interface BundleSpecBuilder {
 
 		/**
 		 * Set included classes
-		 * 
-		 * @param classNames
-		 *            the included class names
+		 *
+		 * @param classNames the included class names
 		 */
 		default BundleSpecExportPackage include(@SuppressWarnings("rawtypes") Class... classes) {
-			return this.include(Stream.of(classes).map(Class::getName).toArray(String[]::new));
+			return this.include(Stream.of(classes)
+				.map(Class::getName)
+				.toArray(String[]::new));
 		}
 
 		default BundleSpecExportPackage exclude(String... classNames) {
@@ -763,7 +748,7 @@ public interface BundleSpecBuilder {
 	 */
 
 	default BundleSpecIncludeResource includeResource(String target, String source, boolean preprocess,
-			boolean absentOk) {
+		boolean absentOk) {
 		String key = target == null ? source : target + "=" + source;
 		if (absentOk)
 			key = "-" + key;
@@ -879,13 +864,37 @@ public interface BundleSpecBuilder {
 	 * import the class' package from the framework (-classpath). This way DS
 	 * can do its magic since the component class will come from the classpath
 	 * although bnd calculates the XML.
-	 * 
-	 * @param class1
-	 *            the class to add as a resource
+	 *
+	 * @param class1 the class to add as a resource
 	 */
 	default BundleSpecBuilder addResource(Class<?> class1) {
-		includeResource(class1.getName().replace('.', '/') + ".class").attribute("class", class1.getName());
-		importPackage(class1.getPackage().getName().toString());
+		includeResource(class1.getName()
+			.replace('.', '/') + ".class").attribute("class", class1.getName());
+		importPackage(class1.getPackage()
+			.getName()
+			.toString());
+		return this;
+	}
+
+	/**
+	 * Actually add the specified class into the bundle. This contrasts with
+	 * {@link #addResource(Class)}, which imports the specified class via OSGi
+	 * (typically from the system classloader). Classes added using this method
+	 * will be loaded from within the framework, rather than by the system
+	 * framework.
+	 *
+	 * @param class1 the class to add as a resource
+	 */
+	default BundleSpecBuilder addResourceWithCopy(Class<?> class1) {
+		String className = class1.getName();
+		String path = className.replace('.', '/') + ".class";
+		URL url = class1.getClassLoader()
+			.getResource(path);
+		if (url == null) {
+			throw new IllegalArgumentException(
+				"Couldn't find class file for " + className + ", possibly a synthetic class");
+		}
+		addResource(path, url);
 		return this;
 	}
 
@@ -908,7 +917,8 @@ public interface BundleSpecBuilder {
 
 	default BundleSpecBuilder addConfiguration(File config) {
 		try {
-			addResource(CONFIGURATION_JSON, config.toURI().toURL());
+			addResource(CONFIGURATION_JSON, config.toURI()
+				.toURL());
 			return this;
 		} catch (Exception e) {
 			throw Exceptions.duck(e);
@@ -917,7 +927,8 @@ public interface BundleSpecBuilder {
 
 	default BundleSpecBuilder addConfiguration(String config) {
 		try {
-			File f = Files.createTempFile("x", "config").toFile();
+			File f = Files.createTempFile("x", "config")
+				.toFile();
 			f.deleteOnExit();
 			IO.store(config, f);
 			addConfiguration(f);
@@ -933,12 +944,21 @@ public interface BundleSpecBuilder {
 	}
 
 	default Bundle install() throws Exception {
-		byte[] build = LaunchpadBuilder.workspace.build(LaunchpadBuilder.projectDir.getAbsolutePath(),
-				x().spec);
-		String name = x().spec.bundleSymbolicName.toString();
+		BuilderSpecification spec = x().spec;
+		byte[] build = LaunchpadBuilder.workspace.build(LaunchpadBuilder.projectDir.getAbsolutePath(), spec);
+		String location;
+		if (spec.location == null) {
+			String name = spec.bundleSymbolicName.toString();
+			String version = spec.bundleVersion;
+			version = (version == null) ? "0" : version;
+			location = name + '-' + version;
+		} else {
+			location = spec.location;
+		}
+
 		ByteArrayInputStream bin = new ByteArrayInputStream(build);
 		return x().ws.getBundleContext()
-			.installBundle(name, bin);
+			.installBundle(location, bin);
 	}
 
 	default Bundle start() {
@@ -956,8 +976,73 @@ public interface BundleSpecBuilder {
 		return this;
 	}
 
+	/**
+	 * Inherit the build instructions from the project
+	 */
+	@Deprecated
 	default BundleSpecBuilder inherit() {
-		x().spec.inherit = true;
+		x().spec.parent.add(BuilderSpecification.PROJECT);
+		return this;
+	}
+
+	/**
+	 * Inherit the build instructions from the project
+	 */
+	default BundleSpecBuilder project() {
+		return parent(BuilderSpecification.PROJECT);
+	}
+
+	/**
+	 * Inherit the build instructions from the workspace
+	 */
+	default BundleSpecBuilder workspace() {
+		return parent(BuilderSpecification.WORKSPACE);
+	}
+
+	/**
+	 * Inherit the build instructions from a file. This file must exist. It is
+	 * used as the properties file for the used builder. The further
+	 * specifications from this builder fully overwrite these properties.
+	 *
+	 * @param path
+	 */
+	default BundleSpecBuilder parent(String path) {
+
+		List<String> paths = x().spec.parent;
+		String last = paths.isEmpty() ? null : paths.get(paths.size() - 1);
+
+		boolean isTerminatedWithProjectOrWorkspace = PROJECT.equals(last) || WORKSPACE.equals(last);
+
+		if (isTerminatedWithProjectOrWorkspace)
+			throw new IllegalArgumentException(
+				"no entries can be added after either PROJECT or WORKSPACE is set as parent");
+
+		boolean isFileParent = !WORKSPACE.equals(path) && !PROJECT.equals(path);
+
+		if (isFileParent) {
+			File f = IO.getFile(x().ws.projectDir, path);
+			if (!f.isFile())
+				throw new IllegalArgumentException("No such parent file " + f.getAbsolutePath());
+
+			path = f.getAbsolutePath();
+		}
+		x().spec.parent.add(path);
+		return this;
+	}
+
+	/**
+	 * Specify the install location of a bundle. This is the value that is
+	 * passed to {@Link BundleContext#installBundle(String,
+	 * java.io.InputStream)} as the location parameter.
+	 * <p>
+	 * If not specified, the location will default to the string
+	 * <tt>bsn-bundleVersion</tt>.
+	 *
+	 * @param location the location string to use for this bundle.
+	 * @return The builder object for chained invocations.
+	 */
+	default BundleSpecBuilder location(String location) {
+		x().spec.location = location;
 		return this;
 	}
 }

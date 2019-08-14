@@ -25,11 +25,11 @@ import aQute.lib.io.IO;
 
 public class XMLType {
 
-	Transformer		transformer;
-	Pattern			paths;
-	String			root;
+	Transformer						transformer;
+	Pattern							paths;
+	String							root;
 
-	static Pattern	QN	= Pattern.compile("[_A-Za-z$][_A-Za-z0-9$]*(\\.[_A-Za-z$][_A-Za-z0-9$]*)*");
+	private final static Pattern	QN	= Pattern.compile("[_A-Za-z$][_A-Za-z0-9$]*(\\.[_A-Za-z$][_A-Za-z0-9$]*)*");
 
 	public XMLType(URL source, String root, String paths) throws Exception {
 		transformer = getTransformer(source);

@@ -34,6 +34,7 @@ import java.nio.file.FileVisitOption;
 import java.nio.file.FileVisitResult;
 import java.nio.file.FileVisitor;
 import java.nio.file.Files;
+import java.nio.file.LinkOption;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
@@ -52,13 +53,14 @@ import java.util.regex.Pattern;
 import aQute.libg.glob.Glob;
 
 public class IO {
-	static final Pattern								WINDOWS_MACROS			= Pattern.compile("%([^%]+)%");
-	static final int									BUFFER_SIZE				= IOConstants.PAGE_SIZE * 16;
+	private static final Pattern						WINDOWS_MACROS			= Pattern.compile("%([^%]+)%");
+	private static final int							BUFFER_SIZE				= IOConstants.PAGE_SIZE * 16;
 	private static final int							DIRECT_MAP_THRESHOLD	= BUFFER_SIZE;
 	private static final boolean						isWindows				= File.separatorChar == '\\';
 	static final public File							work					= new File(
 		System.getProperty("user.dir"));
 	static final public File							home;
+	static final public File							JAVA_HOME;
 	private static final EnumSet<StandardOpenOption>	writeOptions			= EnumSet.of(StandardOpenOption.WRITE,
 		StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
 	private static final EnumSet<StandardOpenOption>	readOptions				= EnumSet.of(StandardOpenOption.READ);
@@ -66,6 +68,7 @@ public class IO {
 	static {
 		EnvironmentCalculator hc = new EnvironmentCalculator(isWindows);
 		home = hc.getHome();
+		JAVA_HOME = hc.getJavaHome();
 	}
 
 	public static String getExtension(String fileName, String deflt) {
@@ -503,11 +506,11 @@ public class IO {
 		return copy(in, new ByteBufferOutputStream()).toByteArray();
 	}
 
-	public static void write(byte[] data, OutputStream out) throws Exception {
+	public static void write(byte[] data, OutputStream out) throws IOException {
 		copy(data, out);
 	}
 
-	public static void write(byte[] data, File file) throws Exception {
+	public static void write(byte[] data, File file) throws IOException {
 		copy(data, file);
 	}
 
@@ -862,7 +865,14 @@ public class IO {
 
 	public static Path mkdirs(Path dir) throws IOException {
 		if (Files.isSymbolicLink(dir)) {
-			return mkdirs(Files.readSymbolicLink(dir));
+			Path target = Files.readSymbolicLink(dir);
+			boolean recreateSymlink = isWindows() && !Files.exists(target, LinkOption.NOFOLLOW_LINKS);
+			Path result = mkdirs(target);
+			if (recreateSymlink) { // recreate symlink on windows
+				delete(dir);
+				createSymbolicLink(dir, target);
+			}
+			return result;
 		}
 		return Files.createDirectories(dir);
 	}
@@ -1094,11 +1104,11 @@ public class IO {
 		return new PrintWriter(new OutputStreamWriter(out, encoding));
 	}
 
-	public static boolean createSymbolicLink(File link, File target) throws Exception {
+	public static boolean createSymbolicLink(File link, File target) throws IOException {
 		return createSymbolicLink(link.toPath(), target.toPath());
 	}
 
-	public static boolean createSymbolicLink(Path link, Path target) throws Exception {
+	public static boolean createSymbolicLink(Path link, Path target) throws IOException {
 		if (isSymbolicLink(link)) {
 			Path linkTarget = Files.readSymbolicLink(link);
 
@@ -1277,7 +1287,7 @@ public class IO {
 		return sb.toString();
 	}
 
-	final static Pattern RESERVED_WINDOWS_P = Pattern.compile("CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9]");
+	private final static Pattern RESERVED_WINDOWS_P = Pattern.compile("CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9]");
 
 	public static boolean isWindows() {
 		return isWindows;
@@ -1299,7 +1309,7 @@ public class IO {
 		 * Get the value of a system environment variable. Expand any macros
 		 * (%...%) if run on windows. Generally, on Linux et. al. environment
 		 * variables are already expanded.
-		 * 
+		 *
 		 * @param key the environment variable name
 		 * @return the value with expanded macros if on windows.
 		 */
@@ -1307,38 +1317,30 @@ public class IO {
 			return getSystemEnv(key, null);
 		}
 
-		String getSystemEnv(String key, Set<String> visited) {
-
+		private String getSystemEnv(String key, Set<String> visited) {
 			String value = getenv(key);
 			if (value == null || !iswindows) {
 				return value;
 			}
 			if (visited == null) {
 				visited = new HashSet<>();
-			} else if (visited.contains(key))
+			}
+			if (!visited.add(key)) {
 				return key;
+			}
 
-			visited.add(key);
-
-			StringBuffer sb = new StringBuffer();
+			StringBuilder sb = new StringBuilder();
 			Matcher matcher = WINDOWS_MACROS.matcher(value);
-			int append = 0;
-			while (matcher.find(append)) {
+			int start = 0;
+			for (; matcher.find(); start = matcher.end()) {
 				String name = matcher.group(1);
 				String replacement = getSystemEnv(name, visited);
-				while (append < matcher.start()) {
-					sb.append(value.charAt(append));
-					append++;
-				}
-				sb.append(replacement);
-				append = matcher.end();
+				sb.append(value, start, matcher.start())
+					.append(replacement);
 			}
-			while (append < value.length()) {
-				sb.append(value.charAt(append));
-				append++;
-			}
-
-			return sb.toString();
+			return (start == 0) ? value
+				: sb.append(value, start, value.length())
+					.toString();
 		}
 
 		String getenv(String key) {
@@ -1346,21 +1348,28 @@ public class IO {
 		}
 
 		File getHome() {
-			File tmp = testFile(getSystemEnv("HOME"));
-
-			if (tmp == null || !tmp.isDirectory()) {
-				tmp = testFile(System.getProperty("user.home"));
+			File home = testFile(getSystemEnv("HOME"));
+			if ((home == null) || !home.isDirectory()) {
+				home = testFile(System.getProperty("user.home"));
 			}
-			assert tmp != null;
-			return tmp;
+			assert home != null;
+			return home;
 		}
 
-		File testFile(String path) {
+		File getJavaHome() {
+			File javaHome = testFile(getSystemEnv("JAVA_HOME"));
+			if ((javaHome == null) || !javaHome.isDirectory()) {
+				javaHome = testFile(System.getProperty("java.home"));
+			}
+			assert javaHome != null;
+			return javaHome;
+		}
+
+		private File testFile(String path) {
 			if (path == null)
 				return null;
 
 			return new File(path);
 		}
-
 	}
 }

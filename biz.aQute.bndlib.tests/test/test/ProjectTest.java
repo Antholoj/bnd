@@ -19,6 +19,7 @@ import aQute.bnd.build.Container;
 import aQute.bnd.build.Project;
 import aQute.bnd.build.ProjectBuilder;
 import aQute.bnd.build.Workspace;
+import aQute.bnd.osgi.About;
 import aQute.bnd.osgi.Builder;
 import aQute.bnd.osgi.Constants;
 import aQute.bnd.osgi.Jar;
@@ -81,19 +82,29 @@ public class ProjectTest extends TestCase {
 	/**
 	 * Test require bnd
 	 */
-	public void testRequireBnd() throws Exception {
-		Workspace ws = getWorkspace(IO.getFile("testresources/ws"));
-		Project top = ws.getProject("p1");
-		top.setProperty("-resourceonly", "true");
-		top.setProperty("-includeresource", "a;literal=''");
-		top.setProperty("-require-bnd", "100000.0");
-		top.build();
-		assertTrue(top.check("-require-bnd fails for filter  values=\\{version="));
+	public void testRequireBndFail() throws Exception {
+		try (Workspace ws = getWorkspace(IO.getFile("testresources/ws")); Project top = ws.getProject("p1")) {
+			top.setProperty("-resourceonly", "true");
+			top.setProperty("-includeresource", "a;literal=''");
+			top.setProperty("-require-bnd", "\"(version=100000.0)\"");
+			top.build();
+			assertTrue(top.check("-require-bnd fails for filter \\(version=100000.0\\) values=\\{version=.*\\}"));
+		}
+	}
+
+	public void testRequireBndPass() throws Exception {
+		try (Workspace ws = getWorkspace(IO.getFile("testresources/ws")); Project top = ws.getProject("p1")) {
+			top.setProperty("-resourceonly", "true");
+			top.setProperty("-includeresource", "a;literal=''");
+			top.setProperty("-require-bnd", "\"(version>=" + About.CURRENT + ")\"");
+			top.build();
+			assertTrue(top.check());
+		}
 	}
 
 	/**
 	 * Test -stalecheck
-	 * 
+	 *
 	 * @throws Exception
 	 */
 	public void testStaleChecks() throws Exception {
@@ -202,6 +213,40 @@ public class ProjectTest extends TestCase {
 			.getBundleSymbolicName());
 		assertEquals("osgi.core", runbundles.get(2)
 			.getBundleSymbolicName());
+
+		List<Container> runpath = new ArrayList<>(project.getRunpath());
+		assertEquals(3, runpath.size());
+
+		List<Container> buildpath = new ArrayList<>(project.getBuildpath());
+		assertEquals(3, buildpath.size());
+
+		List<Container> testpath = new ArrayList<>(project.getTestpath());
+		assertEquals(3, testpath.size());
+	}
+
+	public void testDecoration() throws Exception {
+		Workspace ws = getWorkspace(IO.getFile("testresources/ws"));
+		Project project = ws.getProject("multipath");
+		project.setProperty("-runbundles+", "org.apache.*;startlevel=10");
+		assertNotNull(project);
+
+		List<Container> runbundles = new ArrayList<>(project.getRunbundles());
+		assertEquals(3, runbundles.size());
+		assertEquals("org.apache.felix.configadmin", runbundles.get(0)
+			.getBundleSymbolicName());
+		assertEquals("10", runbundles.get(0)
+			.getAttributes()
+			.get("startlevel"));
+		assertEquals("org.apache.felix.ipojo", runbundles.get(1)
+			.getBundleSymbolicName());
+		assertEquals("10", runbundles.get(1)
+			.getAttributes()
+			.get("startlevel"));
+		assertEquals("osgi.core", runbundles.get(2)
+			.getBundleSymbolicName());
+		assertThat(runbundles.get(2)
+			.getAttributes()
+			.get("startlevel")).isNull();
 
 		List<Container> runpath = new ArrayList<>(project.getRunpath());
 		assertEquals(3, runpath.size());

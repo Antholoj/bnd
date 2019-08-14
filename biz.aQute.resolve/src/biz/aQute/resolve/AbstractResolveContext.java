@@ -50,6 +50,7 @@ import aQute.bnd.deployer.repository.CapabilityIndex;
 import aQute.bnd.deployer.repository.MapToDictionaryAdapter;
 import aQute.bnd.header.Attrs;
 import aQute.bnd.header.Parameters;
+import aQute.bnd.osgi.Constants;
 import aQute.bnd.osgi.Domain;
 import aQute.bnd.osgi.Processor;
 import aQute.bnd.osgi.repository.ResourcesRepository;
@@ -94,8 +95,8 @@ public abstract class AbstractResolveContext extends ResolveContext {
 	 */
 	@Deprecated
 	protected static final String					CONTRACT_OSGI_FRAMEWORK		= "OSGiFramework";
-	protected static final String					IDENTITY_INITIAL_RESOURCE	= "<<INITIAL>>";
-	protected static final String					IDENTITY_SYSTEM_RESOURCE	= "<<SYSTEM>>";
+	protected static final String					IDENTITY_INITIAL_RESOURCE	= Constants.IDENTITY_INITIAL_RESOURCE;
+	protected static final String					IDENTITY_SYSTEM_RESOURCE	= Constants.IDENTITY_SYSTEM_RESOURCE;
 
 	protected final LogService						log;
 	private final CapabilityIndex					systemCapabilityIndex		= new CapabilityIndex();
@@ -296,7 +297,7 @@ public abstract class AbstractResolveContext extends ResolveContext {
 	/**
 	 * Return any capabilities from the given repo. This method will filter the
 	 * blacklist.
-	 * 
+	 *
 	 * @param repo The repo to fetch requirements from
 	 * @param requirement the requirement
 	 * @return a list of caps for the asked requirement minus and capabilities
@@ -658,7 +659,7 @@ public abstract class AbstractResolveContext extends ResolveContext {
 	}
 
 	protected void postProcessProviders(Requirement requirement, Set<Capability> wired, List<Capability> candidates) {
-		if (candidates.size() == 0)
+		if (candidates.isEmpty())
 			return;
 
 		// Call resolver hooks
@@ -711,7 +712,7 @@ public abstract class AbstractResolveContext extends ResolveContext {
 
 	/**
 	 * Get the framework repository from the
-	 * 
+	 *
 	 * @param repos
 	 * @param bsn
 	 */
@@ -736,7 +737,7 @@ public abstract class AbstractResolveContext extends ResolveContext {
 
 	/**
 	 * Add a framework resource to the system resource builder
-	 * 
+	 *
 	 * @param system the system resource being build up
 	 * @param framework the framework resource
 	 * @throws Exception
@@ -883,7 +884,7 @@ public abstract class AbstractResolveContext extends ResolveContext {
 	/**
 	 * Load a bnd path from the OSGi repositories. We assume the highest version
 	 * allowed. This mimics Project.getBundles()
-	 * 
+	 *
 	 * @param system
 	 * @param path
 	 * @param what

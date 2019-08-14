@@ -24,6 +24,22 @@ import aQute.bnd.osgi.Jar;
 
 public class CDIAnnotationTest {
 
+	@Test
+	public void discoveryFromBeansXML() throws Exception {
+		try (Builder b = new Builder()) {
+			b.setProperty("Private-Package", "test.cdi.beans_i.*");
+			b.setProperty("-includeresource", "META-INF/beans.xml=test/test/cdi/beans_i/beans.xml");
+			b.addClasspath(new File("bin_test"));
+			Jar jar = b.build();
+
+			if (!b.check())
+				fail();
+			Attributes a = getAttr(jar);
+			checkProvides(a);
+			checkRequires(a, Arrays.asList("test.cdi.beans_i.AppScopedBean"));
+		}
+	}
+
 	@Test(expected = AssertionError.class)
 	public void noRequiresNoSpecifiedBeans() throws Exception {
 		try (Builder b = new Builder()) {
@@ -36,8 +52,7 @@ public class CDIAnnotationTest {
 				fail();
 			Attributes a = getAttr(jar);
 			checkProvides(a);
-			checkRequires(a,
-				Arrays.asList("test.cdi.beans_a.AppScopedBean"));
+			checkRequires(a, Arrays.asList("test.cdi.beans_a.AppScopedBean"));
 		}
 	}
 
@@ -102,9 +117,10 @@ public class CDIAnnotationTest {
 				fail();
 			Attributes a = getAttr(jar);
 			checkProvides(a);
-			checkRequires(a, Arrays.asList("test.cdi.beans_e.AppScopedBean", "test.cdi.beans_e.SessionScopedBean",
-				"test.cdi.beans_e.ComponentA", "test.cdi.beans_e.DecoratorA", "test.cdi.beans_e.InterceptorA",
-				"test.cdi.beans_e.DependentBean", "test.cdi.beans_e.ComponentScopedBean"));
+			checkRequires(a,
+				Arrays.asList("test.cdi.beans_e.AppScopedBean", "test.cdi.beans_e.SessionScopedBean",
+					"test.cdi.beans_e.ComponentA", "test.cdi.beans_e.DecoratorA", "test.cdi.beans_e.InterceptorA",
+					"test.cdi.beans_e.DependentBean", "test.cdi.beans_e.ComponentScopedBean"));
 		}
 	}
 
@@ -163,8 +179,7 @@ public class CDIAnnotationTest {
 				"test.cdi.beans_f.Foo"
 			}, new String[] {
 				"test.cdi.beans_f.Blah", "test.cdi.beans_f.Bar", "test.cdi.beans_f.Fee"
-			}
-			);
+			});
 			checkRequires(a, Arrays.asList("test.cdi.beans_f.AppScopedBean", "test.cdi.beans_f.ServiceB",
 				"test.cdi.beans_f.ServiceC"));
 		}
@@ -293,6 +308,25 @@ public class CDIAnnotationTest {
 	}
 
 	@Test
+	public void discoverEmptyXmlInInBCP() throws Exception {
+		try (Builder b = new Builder()) {
+			b.setProperty("Private-Package", "test.cdi.beans_h.*");
+			b.setProperty("-fixupmessages", "While traversing the type tree for;is:=ignore");
+			b.setProperty("-includeresource", "resteasy-cdi-*.jar;lib:=true");
+			b.addClasspath(new File("bin_test"));
+			b.addClasspath(new File("jar/resteasy-cdi-4.0.0.Beta8.jar"));
+			Jar jar = b.build();
+
+			if (!b.check())
+				fail();
+			Attributes a = getAttr(jar);
+			checkProvides(a);
+			checkRequires(a, Arrays.asList("test.cdi.beans_h.AppScopedBean"), "java.lang.Character",
+				"java.lang.Integer", "java.lang.Long");
+		}
+	}
+
+	@Test
 	public void beansXmlInWab() throws Exception {
 		try (Builder b = new Builder(); Jar wab = new Jar(new File("jar/tck-V3URLTests.wab.war"))) {
 			b.setJar(wab);
@@ -356,8 +390,7 @@ public class CDIAnnotationTest {
 		if (beans != null) {
 			Attrs attr = header.get("osgi.extender");
 			assertNotNull(attr);
-			assertEquals("(&(osgi.extender=osgi.cdi)(version>=1.0.0)(!(version>=2.0.0)))",
-				attr.get("filter:"));
+			assertEquals("(&(osgi.extender=osgi.cdi)(version>=1.0.0)(!(version>=2.0.0)))", attr.get("filter:"));
 			assertThat(attr.getTyped("beans")).isInstanceOf(List.class)
 				.asList()
 				.containsAll(beans)

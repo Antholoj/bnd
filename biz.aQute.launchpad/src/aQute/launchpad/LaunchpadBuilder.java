@@ -7,13 +7,18 @@ import java.net.MalformedURLException;
 import java.net.URL;
 import java.net.URLClassLoader;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Collections;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.ServiceLoader;
+import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Predicate;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
@@ -24,22 +29,29 @@ import org.osgi.framework.launch.FrameworkFactory;
 import aQute.bnd.remoteworkspace.client.RemoteWorkspaceClientFactory;
 import aQute.bnd.service.remoteworkspace.RemoteWorkspace;
 import aQute.bnd.service.remoteworkspace.RemoteWorkspaceClient;
+import aQute.bnd.service.specifications.BuilderSpecification;
 import aQute.bnd.service.specifications.RunSpecification;
 import aQute.lib.exceptions.Exceptions;
 import aQute.lib.io.IO;
 import aQute.lib.strings.Strings;
+import aQute.libg.glob.Glob;
+import aQute.libg.parameters.ParameterMap;
 
 /**
  * This class is a builder for frameworks that can be used in JUnit testing.
  */
 public class LaunchpadBuilder implements AutoCloseable {
 
-	final static ExecutorService	executor	= Executors.newCachedThreadPool();
-	final static File				projectDir	= IO.work;
-	final static RemoteWorkspace	workspace	= RemoteWorkspaceClientFactory.create(projectDir,
+	private static final String		LAUNCHPAD_NAME		= "launchpad.name";
+	private static final String		LAUNCHPAD_CLASSNAME	= "launchpad.classname";
+
+	private static final String		EXCLUDEEXPORTS		= "-excludeexports";
+	final static ExecutorService	executor			= Executors.newCachedThreadPool();
+	final static File				projectDir			= IO.work;
+	final static RemoteWorkspace	workspace			= RemoteWorkspaceClientFactory.create(projectDir,
 		new RemoteWorkspaceClient() {});
 	final static RunSpecification	projectTestSetup;
-	final static AtomicInteger		counter		= new AtomicInteger();
+	final static AtomicInteger		counter				= new AtomicInteger();
 
 	static {
 		projectTestSetup = workspace.analyzeTestSetup(IO.work.getAbsolutePath());
@@ -69,11 +81,17 @@ public class LaunchpadBuilder implements AutoCloseable {
 			}));
 	}
 
-	RunSpecification	local;
-	boolean				start		= true;
-	boolean				testbundle	= true;
-	long				closeTimeout	= 60000;
-	boolean				debug;
+	RunSpecification				local;
+	boolean							start			= true;
+	boolean							testbundle		= true;
+	boolean							byReference		= true;
+	long							closeTimeout	= 60000;
+	boolean							debug;
+	final Set<Class<?>>				hide			= new HashSet<>();
+	final List<Predicate<String>>	excludeExports	= new ArrayList<>();
+	final List<String>				exports			= new ArrayList<>();
+	ClassLoader						myClassLoader;
+	String							parentLoader	= Constants.FRAMEWORK_BUNDLE_PARENT_BOOT;
 
 	/**
 	 * Start a framework assuming the current working directory is the project
@@ -145,6 +163,11 @@ public class LaunchpadBuilder implements AutoCloseable {
 		return this;
 	}
 
+	public LaunchpadBuilder hide(Class<?> hide) {
+		this.hide.add(hide);
+		return this;
+	}
+
 	public LaunchpadBuilder notestbundle() {
 		this.testbundle = false;
 		return this;
@@ -172,39 +195,94 @@ public class LaunchpadBuilder implements AutoCloseable {
 		return this;
 	}
 
+	public LaunchpadBuilder usingClassLoader(ClassLoader loader) {
+		this.myClassLoader = loader;
+		return this;
+	}
+
 	public LaunchpadBuilder debug() {
 		this.debug = true;
 		return this;
 	}
 
+	/**
+	 * Exclude the exports that are matched by any of the given globs
+	 *
+	 * @param globs the globs to match against the system framework exports
+	 * @return this
+	 */
+	public LaunchpadBuilder excludeExport(String... globs) {
+		Stream.of(globs)
+			.flatMap((x) -> Strings.splitAsStream(x))
+			.map(this::toPredicate)
+			.forEach(excludeExports::add);
+		return this;
+	}
+
+	/**
+	 * Exclude the exports that are matched by any of the given predicates
+	 *
+	 * @param predicate the predicates to match against the system framework
+	 *            exports
+	 * @return this
+	 */
+	public LaunchpadBuilder excludeExport(Predicate<String> predicate) {
+		excludeExports.add(predicate);
+		return this;
+	}
+
 	public Launchpad create() {
+		StackTraceElement element = new Exception().getStackTrace()[1];
+		return create(element.getMethodName(), element.getClassName());
+	}
+
+	public Launchpad create(String name) {
+		StackTraceElement element = new Exception().getStackTrace()[1];
+		return create(name, element.getClassName());
+	}
+
+	public Launchpad create(String name, String className) {
 		try {
-			File storage = IO.getFile(new File(local.target), "launchpad-" + counter.incrementAndGet());
+			File storage = IO.getFile(new File(local.target), "launchpad/launchpad-" + counter.incrementAndGet());
 			IO.delete(storage);
 
-			String extraPackages = toString(local.extraSystemPackages);
-			String extraCapabilities = toString(local.extraSystemCapabilities);
+			List<Predicate<String>> localExcludeExports = new ArrayList<>(excludeExports);
+			new ParameterMap(local.instructions.get(EXCLUDEEXPORTS)).keySet()
+				.stream()
+				.map(this::toPredicate)
+				.forEach(localExcludeExports::add);
 
-			local.properties.put(Constants.FRAMEWORK_SYSTEMPACKAGES_EXTRA, extraPackages);
-			local.properties.put(Constants.FRAMEWORK_SYSTEMCAPABILITIES_EXTRA, extraCapabilities);
-			local.properties.put(Constants.FRAMEWORK_STORAGE, storage.getAbsolutePath());
-			local.properties.put(Constants.FRAMEWORK_STORAGE_CLEAN, Constants.FRAMEWORK_STORAGE_CLEAN_ONFIRSTINIT);
-			local.properties.put(Constants.FRAMEWORK_BUNDLE_PARENT, Constants.FRAMEWORK_BUNDLE_PARENT_FRAMEWORK);
+			ParameterMap restrictedExports = restrict(new ParameterMap(local.extraSystemPackages), localExcludeExports);
 
-			Framework framework = getFramework();
+			String extraPackages = restrictedExports.toString();
+
+			String extraCapabilities = new ParameterMap(local.extraSystemCapabilities).toString();
+
+			RunSpecification runspec = new RunSpecification();
+			runspec.mergeWith(local);
+
+			runspec.properties.put(Constants.FRAMEWORK_SYSTEMPACKAGES_EXTRA, extraPackages);
+			runspec.properties.put(Constants.FRAMEWORK_SYSTEMCAPABILITIES_EXTRA, extraCapabilities);
+			runspec.properties.put(Constants.FRAMEWORK_STORAGE, storage.getAbsolutePath());
+			runspec.properties.put(Constants.FRAMEWORK_STORAGE_CLEAN, Constants.FRAMEWORK_STORAGE_CLEAN_ONFIRSTINIT);
+			runspec.properties.put(Constants.FRAMEWORK_BUNDLE_PARENT, parentLoader);
+			runspec.properties.put(LAUNCHPAD_NAME, name);
+			runspec.properties.put(LAUNCHPAD_CLASSNAME, className);
+
+			Framework framework = getFramework(runspec);
 
 			@SuppressWarnings("resource")
-			Launchpad launchpad = new Launchpad(this, framework);
+			Launchpad launchpad = new Launchpad(framework, name, className, runspec, closeTimeout, debug, testbundle,
+				byReference);
 
-			launchpad.report("Extra system packages %s", local.extraSystemPackages.keySet()
-				.stream()
-				.collect(Collectors.joining("\n")));
-			launchpad.report("Extra system capabilities %s", local.extraSystemCapabilities.keySet()
-				.stream()
-				.collect(Collectors.joining("\n")));
+			launchpad.report("ALL extra system packages\n     %s", toLines(local.extraSystemPackages.keySet()));
+			launchpad.report("Filtered extra system packages\n     %s", toLines(restrictedExports.keySet()));
+			launchpad.report("ALL extra system capabilities\n     %s", toLines(local.extraSystemCapabilities.keySet()));
+
 			launchpad.report("Storage %s", storage.getAbsolutePath());
 			launchpad.report("Runpath %s", local.runpath);
 
+			hide.forEach(launchpad::hide);
 			if (start) {
 				launchpad.start();
 			}
@@ -213,6 +291,12 @@ public class LaunchpadBuilder implements AutoCloseable {
 		} catch (Exception e) {
 			throw Exceptions.duck(e);
 		}
+	}
+
+	private String toLines(Collection<String> set) {
+		return set.stream()
+			.sorted()
+			.collect(Collectors.joining("\n     "));
 	}
 
 	// private Map<String, Map<String, String>> addUses(Map<String, Map<String,
@@ -226,7 +310,7 @@ public class LaunchpadBuilder implements AutoCloseable {
 	// })
 	// .filter(s -> !s.startsWith("java"))
 	// .distinct()
-	// .collect(Collectors.joining(","));
+	// .collect(Strings.joining());
 	//
 	// extraSystemPackages.entrySet()
 	// .forEach(e -> {
@@ -236,43 +320,6 @@ public class LaunchpadBuilder implements AutoCloseable {
 	// return extraSystemPackages;
 	// }
 
-	private String toString(Map<String, Map<String, String>> map) {
-		StringBuilder sb = new StringBuilder();
-		String del = "";
-		for (Map.Entry<String, Map<String, String>> e : map.entrySet()) {
-
-			String key = e.getKey();
-			while (key.endsWith("~"))
-				key = key.substring(0, key.length() - 1);
-
-			sb.append(del);
-			sb.append(key);
-			e.getValue()
-				.entrySet()
-				.forEach(ee -> {
-					sb.append(";");
-					sb.append(ee.getKey());
-					sb.append("=");
-					sb.append("\"");
-					for (int i = 0; i < ee.getValue()
-						.length(); i++) {
-						char c = ee.getValue()
-							.charAt(i);
-						switch (c) {
-							case '\n' :
-							case '"' :
-								sb.append('\\');
-								break;
-						}
-						sb.append(c);
-					}
-					sb.append("\"");
-				});
-			del = ", ";
-		}
-		return sb.toString();
-	}
-
 	/**
 	 * We're not closing the framework and reuse the static variables. That
 	 * means we never really shut down the remote connection and let the process
@@ -281,15 +328,15 @@ public class LaunchpadBuilder implements AutoCloseable {
 	@Override
 	public void close() throws Exception {}
 
-	Framework getFramework() {
+	Framework getFramework(RunSpecification runspec) {
 		try {
 			ClassLoader loader;
 
-			if (local.runpath.isEmpty() && local.runfw.isEmpty()) {
+			if (runspec.runpath.isEmpty() && local.runfw.isEmpty()) {
 				loader = getMyClassLoader();
 			} else {
 				List<String> runpath = new ArrayList<>(local.runfw);
-				runpath.addAll(local.runpath);
+				runpath.addAll(runspec.runpath);
 				URL[] urls = runpath.stream()
 					.map(File::new)
 					.map(this::toURL)
@@ -302,7 +349,7 @@ public class LaunchpadBuilder implements AutoCloseable {
 			if (factory == null) {
 				throw new IllegalArgumentException("Could not find an OSGi Framework on the runpath " + local.runpath);
 			}
-			return factory.newFramework(local.properties);
+			return factory.newFramework(runspec.properties);
 		} catch (Exception e) {
 			throw Exceptions.duck(e);
 		}
@@ -332,7 +379,7 @@ public class LaunchpadBuilder implements AutoCloseable {
 	}
 
 	private ClassLoader getMyClassLoader() {
-		return LaunchpadBuilder.class.getClassLoader();
+		return myClassLoader == null ? LaunchpadBuilder.class.getClassLoader() : myClassLoader;
 	}
 
 	private URL toURL(File file) {
@@ -344,4 +391,74 @@ public class LaunchpadBuilder implements AutoCloseable {
 		}
 	}
 
+	public LaunchpadBuilder snapshot() {
+		this.bundles("biz.aQute.bnd.runtime.snapshot");
+		return this;
+	}
+
+	private ParameterMap restrict(ParameterMap map, Collection<Predicate<String>> globs) {
+		if (!exports.isEmpty()) {
+			return map.restrict(exports);
+		}
+
+		if (globs == null || globs.isEmpty())
+			return map;
+
+		ParameterMap parameters = new ParameterMap();
+		local.extraSystemPackages.entrySet()
+			.stream()
+			.filter(e -> {
+				for (Predicate<String> p : excludeExports) {
+					if (p.test(e.getKey()))
+						return false;
+				}
+				return true;
+			})
+			.forEach(e -> parameters.put(e.getKey(), e.getValue()));
+		return parameters;
+	}
+
+	Predicate<String> toPredicate(String specification) {
+		Glob g = new Glob(specification);
+		return (test) -> g.matches(test);
+	}
+
+	public LaunchpadBuilder copyInstall() {
+		byReference = false;
+		return this;
+	}
+
+	public LaunchpadBuilder addCapability(String namespace, String... keyVal) {
+		Map<String, String> attrs = new HashMap<>();
+		for (int i = 0; i < keyVal.length - 1; i += 2) {
+			attrs.put(keyVal[i], keyVal[i + 1]);
+		}
+		while (local.extraSystemCapabilities.containsKey(namespace))
+			namespace += "~";
+
+		local.extraSystemCapabilities.put(namespace, attrs);
+		return this;
+	}
+
+	public RunSpecification getLocal() {
+		return local;
+	}
+
+	public byte[] build(String path, BuilderSpecification spec) {
+		return workspace.build(path, spec);
+	}
+
+	public LaunchpadBuilder export(String spec) {
+		exports.add(spec);
+		return this;
+	}
+
+	public boolean isDebug() {
+		return debug;
+	}
+
+	public LaunchpadBuilder applicationLoaderAsParent() {
+		this.parentLoader = Constants.FRAMEWORK_BUNDLE_PARENT_APP;
+		return this;
+	}
 }

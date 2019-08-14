@@ -5,9 +5,11 @@ import java.io.StringWriter;
 import java.io.Writer;
 import java.net.InetAddress;
 import java.net.URL;
-import java.text.SimpleDateFormat;
-import java.util.Date;
+import java.time.Instant;
+import java.time.ZoneId;
+import java.time.format.DateTimeFormatter;
 import java.util.List;
+import java.util.Locale;
 import java.util.StringTokenizer;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -20,7 +22,9 @@ import junit.framework.AssertionFailedError;
 import junit.framework.Test;
 
 public class JunitXmlReport implements TestReporter {
-	private static final SimpleDateFormat	sdf			= new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss");
+	private static final DateTimeFormatter	DATE_TIME_FORMATTER	= DateTimeFormatter.ISO_LOCAL_DATE_TIME
+		.withLocale(Locale.ROOT)
+		.withZone(ZoneId.systemDefault());
 	private final Tag						testsuite	= new Tag("testsuite");
 	private Tag								testcase;
 	private static String					hostname;
@@ -31,15 +35,18 @@ public class JunitXmlReport implements TestReporter {
 	private final BasicTestReport			basic;
 
 	public JunitXmlReport(Writer report, Bundle bundle, BasicTestReport basic) throws Exception {
-		if (hostname == null)
-			hostname = InetAddress.getLocalHost()
-				.getHostName();
+		try {
+			if (hostname == null)
+				hostname = InetAddress.getLocalHost()
+					.getHostName();
+		} catch (Exception e) {
+			hostname = e.getMessage();
+		}
 		out = new PrintWriter(report);
 		this.basic = basic;
 	}
 
-	public void setProgress(boolean progress) {
-	}
+	public void setProgress(boolean progress) {}
 
 	@Override
 	public void setup(Bundle fw, Bundle targetBundle) {
@@ -53,10 +60,7 @@ public class JunitXmlReport implements TestReporter {
 			testsuite.addAttribute("name", "test.run");
 
 		}
-		String timestamp;
-		synchronized (sdf) {
-			timestamp = sdf.format(new Date());
-		}
+		String timestamp = DATE_TIME_FORMATTER.format(Instant.now());
 		testsuite.addAttribute("timestamp", timestamp);
 		testsuite.addAttribute("framework", fw);
 		testsuite.addAttribute("framework-version", fw.getVersion());
@@ -75,7 +79,7 @@ public class JunitXmlReport implements TestReporter {
 		}
 
 		if (targetBundle != null) {
-			String header = (String) targetBundle.getHeaders()
+			String header = targetBundle.getHeaders()
 				.get(aQute.bnd.osgi.Constants.BND_ADDXMLTOTEST);
 			if (header != null) {
 				StringTokenizer st = new StringTokenizer(header, " ,");
@@ -109,10 +113,7 @@ public class JunitXmlReport implements TestReporter {
 			testsuite.addAttribute("errors", basic.getTestResult()
 				.errorCount());
 			testsuite.addAttribute("time", getFraction(System.currentTimeMillis() - startTime, 1000));
-			String timestamp;
-			synchronized (sdf) {
-				timestamp = sdf.format(new Date());
-			}
+			String timestamp = DATE_TIME_FORMATTER.format(Instant.now());
 			testsuite.addAttribute("timestamp", timestamp);
 			testsuite.print(0, out);
 			out.close();
@@ -125,7 +126,7 @@ public class JunitXmlReport implements TestReporter {
 
 	// <testcase classname="test.AnnotationsTest" name="testComponentReader"
 	// time="0.045" />
-	static Pattern NAMEANDCLASS = Pattern.compile("(.*)\\((.*)\\)");
+	private final static Pattern NAMEANDCLASS = Pattern.compile("(.*)\\((.*)\\)");
 
 	@Override
 	public void startTest(Test test) {

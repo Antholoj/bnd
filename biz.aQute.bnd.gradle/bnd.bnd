@@ -1,5 +1,7 @@
 # Set javac settings from JDT prefs
--include: ${workspace}/cnf/includes/jdt.bnd
+# Include the gradle.properties to get the value of bnd_plugin which is used
+# for the bnd_version for the test cases.
+-include: ${workspace}/cnf/includes/jdt.bnd, ${workspace}/gradle.properties
 
 -dependson: biz.aQute.bnd.embedded-repo
 
@@ -12,7 +14,7 @@
 
 -digests: MD5, SHA1
 
-Bundle-Description: The bnd gradle plugin.
+Bundle-Description: The Bnd Gradle plugin.
 
 -buildpath: \
 	aQute.libg;version=project, \
@@ -20,12 +22,12 @@ Bundle-Description: The bnd gradle plugin.
 	biz.aQute.resolve;version=latest, \
 	biz.aQute.repository;version=latest
 
-pluginClasspath: ${p-buildpath;\\${pathseparator}}
+bnd_version: ${replace;${bnd_plugin};.*:(.*);$1}
 
 -includeresource: \
 	OSGI-OPT/src=src, \
 	resources, \
-	embedded-repo.jar=${repo;biz.aQute.bnd.embedded-repo;latest}
+	embedded-repo.jar=${repo;biz.aQute.bnd.embedded-repo;snapshot}
 
 -builderignore: testresources
 

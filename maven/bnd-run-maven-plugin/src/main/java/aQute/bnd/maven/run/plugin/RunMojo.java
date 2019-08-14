@@ -7,13 +7,15 @@ import java.util.Arrays;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ForkJoinPool;
+import java.util.concurrent.ScheduledExecutorService;
 
 import org.apache.maven.execution.MavenSession;
 import org.apache.maven.plugin.AbstractMojo;
 import org.apache.maven.plugin.MojoExecutionException;
 import org.apache.maven.plugin.MojoFailureException;
 import org.apache.maven.plugins.annotations.Component;
-import org.apache.maven.plugins.annotations.Execute;
 import org.apache.maven.plugins.annotations.LifecyclePhase;
 import org.apache.maven.plugins.annotations.Mojo;
 import org.apache.maven.plugins.annotations.Parameter;
@@ -22,24 +24,29 @@ import org.apache.maven.project.MavenProject;
 import org.apache.maven.project.ProjectDependenciesResolver;
 import org.eclipse.aether.RepositorySystem;
 import org.eclipse.aether.RepositorySystemSession;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
+import aQute.bnd.build.ProjectLauncher;
+import aQute.bnd.build.ProjectLauncher.LiveCoding;
 import aQute.bnd.maven.lib.configuration.Bndruns;
 import aQute.bnd.maven.lib.configuration.Bundles;
 import aQute.bnd.maven.lib.resolve.BndrunContainer;
 import aQute.bnd.maven.lib.resolve.Operation;
 import aQute.bnd.maven.lib.resolve.Scope;
 
-@Mojo(name = "run", defaultPhase = LifecyclePhase.VERIFY, requiresDirectInvocation = true, requiresProject = true, requiresDependencyResolution = ResolutionScope.TEST)
-@Execute(goal = "run")
+@Mojo(name = "run", defaultPhase = LifecyclePhase.PACKAGE, requiresDirectInvocation = true, requiresProject = true, requiresDependencyResolution = ResolutionScope.TEST, threadSafe = true)
 public class RunMojo extends AbstractMojo {
+	private static final Logger									logger	= LoggerFactory.getLogger(RunMojo.class);
+
 	@Parameter(defaultValue = "${project}", readonly = true, required = true)
 	private MavenProject										project;
 
 	@Parameter(defaultValue = "${repositorySystemSession}", readonly = true, required = true)
 	private RepositorySystemSession								repositorySession;
 
-	@Parameter(required = true)
-	private File 												bndrun;
+	@Parameter
+	private File												bndrun;
 
 	@Parameter(required = false)
 	private Bundles												bundles	= new Bundles();
@@ -72,6 +79,11 @@ public class RunMojo extends AbstractMojo {
 
 	@Override
 	public void execute() throws MojoExecutionException, MojoFailureException {
+		if (bndrun == null) {
+			logger.info("Nothing to run.");
+			return;
+		}
+
 		int errors = 0;
 
 		try {
@@ -99,9 +111,13 @@ public class RunMojo extends AbstractMojo {
 
 	private Operation getOperation() {
 		return (file, runName, run) -> {
-			try {
-				run.runLocal();
+			ScheduledExecutorService scheduledExecutor = Executors.newSingleThreadScheduledExecutor();
+			try (ProjectLauncher pl = run.getProjectLauncher();
+				LiveCoding liveCoding = pl.liveCoding(ForkJoinPool.commonPool(), scheduledExecutor)) {
+				pl.setTrace(run.isTrace() || run.isRunTrace());
+				pl.launch();
 			} finally {
+				scheduledExecutor.shutdownNow();
 				int errors = report(run);
 				if (errors > 0) {
 					return errors;

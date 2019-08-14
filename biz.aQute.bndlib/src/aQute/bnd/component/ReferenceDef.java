@@ -45,6 +45,7 @@ class ReferenceDef extends ExtensionDef {
 	boolean					isCollection;
 	boolean					isCollectionSubClass;
 	Integer					parameter;
+	String					reasonForVersion;
 
 	public ReferenceDef(XMLAttributeFinder finder) {
 		super(finder);
@@ -52,7 +53,7 @@ class ReferenceDef extends ExtensionDef {
 
 	/**
 	 * Prepare the reference, will check for any errors.
-	 * 
+	 *
 	 * @param analyzer the analyzer to report errors to.
 	 * @throws Exception
 	 */
@@ -61,8 +62,12 @@ class ReferenceDef extends ExtensionDef {
 			analyzer.error("No name for a reference");
 		}
 
-		if ((updated != null && !updated.equals("-")) || policyOption != null) {
-			updateVersion(V1_2);
+		if ((updated != null && !updated.equals("-"))) {
+			updateVersion(V1_2, "updated in reference");
+		}
+
+		if (policyOption != null) {
+			updateVersion(V1_2, "policyOption");
 		}
 
 		if (target != null) {
@@ -79,15 +84,18 @@ class ReferenceDef extends ExtensionDef {
 			analyzer.nonClassReferTo(ref);
 		}
 
-		if (scope != null || field != null) {
-			updateVersion(V1_3);
+		if (scope != null) {
+			updateVersion(V1_3, "scope in reference");
+		}
+		if (field != null) {
+			updateVersion(V1_3, "field reference");
 		}
 
 	}
 
 	/**
 	 * Calculate the tag.
-	 * 
+	 *
 	 * @param namespaces
 	 * @return a tag for the reference element.
 	 */
@@ -129,8 +137,12 @@ class ReferenceDef extends ExtensionDef {
 		return name;
 	}
 
-	void updateVersion(Version version) {
-		this.version = ComponentDef.max(this.version, version);
+	void updateVersion(Version version, String reason) {
+		if (this.version.compareTo(version) >= 0)
+			return;
+
+		this.version = version;
+		this.reasonForVersion = reason;
 	}
 
 }

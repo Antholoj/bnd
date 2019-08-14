@@ -330,7 +330,7 @@ public class PomResource extends WriteResource {
 			processor.warning("POM will not validate on Central due to missing Bundle-Developers header");
 		}
 
-		Parameters dependencies = new Parameters(processor.getProperty(Constants.MAVEN_DEPENDENCIES), processor);
+		Parameters dependencies = processor.getMergedParameters(Constants.MAVEN_DEPENDENCIES);
 		if (!dependencies.isEmpty()) {
 			Tag tdependencies = new Tag("dependencies");
 			dependencies.values()
@@ -353,7 +353,7 @@ public class PomResource extends WriteResource {
 
 	/**
 	 * Utility function to print a tag from a map
-	 * 
+	 *
 	 * @param parent
 	 * @param attrs
 	 * @param key

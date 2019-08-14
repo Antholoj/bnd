@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+	xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
 	xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
 	<modelVersion>4.0.0</modelVersion>
 
@@ -27,6 +28,7 @@
 		<module>bnd-testing-maven-plugin</module>
 		<module>bnd-resolver-maven-plugin</module>
 		<module>bnd-run-maven-plugin</module>
+		<module>bnd-reporter-maven-plugin</module>
 	</modules>
 
 	<url>https://bnd.bndtools.org/</url>
@@ -36,8 +38,9 @@
 	</organization>
 	<licenses>
 		<license>
-			<name>Apache License, Version 2.0</name>
-			<url>http://www.opensource.org/licenses/apache2.0.php</url>
+			<name>Apache-2.0</name>
+			<comments>Apache License, Version 2.0</comments>
+			<url>https://opensource.org/licenses/apache2.0.php</url>
 			<distribution>repo</distribution>
 		</license>
 	</licenses>
@@ -137,6 +140,11 @@
 				<version>${project.version}</version>
 			</dependency>
 			<dependency>
+				<groupId>biz.aQute.bnd</groupId>
+				<artifactId>biz.aQute.bnd.reporter</artifactId>
+				<version>${project.version}</version>
+			</dependency>
+			<dependency>
 				<groupId>junit</groupId>
 				<artifactId>junit</artifactId>
 				<version>4.12</version>
@@ -145,7 +153,7 @@
 			<dependency>
 				<groupId>org.assertj</groupId>
 				<artifactId>assertj-core</artifactId>
-				<version>3.10.0</version>
+				<version>3.12.1</version>
 				<scope>test</scope>
 			</dependency>
 			<dependency>
@@ -182,7 +190,7 @@
 				<plugin>
 					<groupId>org.apache.maven.plugins</groupId>
 					<artifactId>maven-plugin-plugin</artifactId>
-					<version>3.5.2</version>
+					<version>3.6.0</version>
 					<executions>
 						<execution>
 							<id>default-descriptor</id>
@@ -203,7 +211,7 @@
 				<plugin>
 					<groupId>org.apache.maven.plugins</groupId>
 					<artifactId>maven-jar-plugin</artifactId>
-					<version>3.1.0</version>
+					<version>3.1.1</version>
 				</plugin>
 				<plugin>
 					<groupId>org.apache.maven.plugins</groupId>
@@ -232,7 +240,7 @@
 				<plugin>
 					<groupId>org.apache.maven.plugins</groupId>
 					<artifactId>maven-javadoc-plugin</artifactId>
-					<version>3.0.1</version>
+					<version>3.1.0</version>
 					<executions>
 						<execution>
 							<id>attach-javadocs</id>
@@ -242,19 +250,45 @@
 							</goals>
 						</execution>
 					</executions>
-                <configuration>
-                    <javaApiLinks>
-                        <property>
-                            <name>jdk11-workaround</name>
-                            <value>https://bugs.openjdk.java.net/browse/JDK-8212233</value>
-                        </property>
-                    </javaApiLinks>
-                </configuration>
+					<configuration>
+						<detectJavaApiLink>
+							false
+						</detectJavaApiLink>
+					</configuration>
 				</plugin>
 				<plugin>
 					<groupId>org.apache.maven.plugins</groupId>
 					<artifactId>maven-invoker-plugin</artifactId>
-					<version>3.1.0</version>
+					<version>3.2.0</version>
+					<configuration>
+						<cloneProjectsTo>${project.build.directory}/integration-test/projects</cloneProjectsTo>
+						<cloneClean>true</cloneClean>
+						<projectsDirectory>src/test/resources/integration-test</projectsDirectory>
+						<settingsFile>src/test/resources/integration-test/settings.xml</settingsFile>
+						<streamLogs>true</streamLogs>
+						<localRepositoryPath>${project.build.directory}/integration-test/repo</localRepositoryPath>
+						<postBuildHookScript>verify.groovy</postBuildHookScript>
+						<properties>
+							<maven.compiler.source>${maven.compiler.source}</maven.compiler.source>
+							<maven.compiler.target>${maven.compiler.target}</maven.compiler.target>
+							<org.slf4j.simpleLogger.log.org.apache.maven.cli.transfer.Slf4jMavenTransferListener>warn</org.slf4j.simpleLogger.log.org.apache.maven.cli.transfer.Slf4jMavenTransferListener>
+						</properties>
+						<scriptVariables>
+							<bndVersion>${project.version}</bndVersion>
+						</scriptVariables>
+						<goals>
+							<goal>package</goal>
+						</goals>
+					</configuration>
+					<executions>
+						<execution>
+							<id>integration-test</id>
+							<goals>
+								<goal>install</goal>
+								<goal>run</goal>
+							</goals>
+						</execution>
+					</executions>
 				</plugin>
 				<plugin>
 					<groupId>org.eclipse.m2e</groupId>
@@ -293,33 +327,33 @@
 									</action>
 								</pluginExecution>
 								<pluginExecution>
-								<pluginExecutionFilter>
-									<groupId>org.apache.maven.plugins</groupId>
-									<artifactId>maven-plugin-plugin</artifactId>
-									<versionRange>[3.5.2,)</versionRange>
-									<goals>
-										<goal>descriptor</goal>
-									</goals>
-								</pluginExecutionFilter>
-								<action>
-									<execute>
-										<runOnConfiguration>true</runOnConfiguration>
-										<runOnIncremental>true</runOnIncremental>
-									</execute>
-								</action>
+									<pluginExecutionFilter>
+										<groupId>org.apache.maven.plugins</groupId>
+										<artifactId>maven-plugin-plugin</artifactId>
+										<versionRange>[3.5.2,)</versionRange>
+										<goals>
+											<goal>descriptor</goal>
+										</goals>
+									</pluginExecutionFilter>
+									<action>
+										<execute>
+											<runOnConfiguration>true</runOnConfiguration>
+											<runOnIncremental>true</runOnIncremental>
+										</execute>
+									</action>
 								</pluginExecution>
 								<pluginExecution>
-								<pluginExecutionFilter>
-									<groupId>org.codehaus.mojo</groupId>
-									<artifactId>flatten-maven-plugin</artifactId>
-									<versionRange>[1.0.1,)</versionRange>
-									<goals>
-										<goal>flatten</goal>
-									</goals>
-								</pluginExecutionFilter>
-								<action>
-									<ignore />
-								</action>
+									<pluginExecutionFilter>
+										<groupId>org.codehaus.mojo</groupId>
+										<artifactId>flatten-maven-plugin</artifactId>
+										<versionRange>[1.0.1,)</versionRange>
+										<goals>
+											<goal>flatten</goal>
+										</goals>
+									</pluginExecutionFilter>
+									<action>
+										<ignore />
+									</action>
 								</pluginExecution>
 							</pluginExecutions>
 						</lifecycleMappingMetadata>
@@ -342,7 +376,7 @@
 				<plugin>
 					<groupId>org.codehaus.mojo</groupId>
 					<artifactId>flatten-maven-plugin</artifactId>
-					<version>1.0.1</version>
+					<version>1.1.0</version>
 					<configuration>
 						<flattenMode>oss</flattenMode>
 					</configuration>

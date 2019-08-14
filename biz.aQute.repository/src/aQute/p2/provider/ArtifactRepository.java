@@ -110,8 +110,13 @@ class ArtifactRepository extends XML {
 					continue;
 				}
 
-				Map<String, String> map = Converter.cnv(new TypeReference<Map<String, String>>() {
-				}, xmlArtifact);
+				Map<String, String> artifactProperties = getProperties(artifactNode, "properties/property");
+				xmlArtifact.format = artifactProperties.get("format");
+				if (xmlArtifact.format != null) {
+					continue; // we do not currently support packed format
+				}
+
+				Map<String, String> map = Converter.cnv(new TypeReference<Map<String, String>>() {}, xmlArtifact);
 				try (Processor domain = new Processor(parent)) {
 					domain.addProperties(map);
 
@@ -126,7 +131,13 @@ class ArtifactRepository extends XML {
 							artifact.uri = uri;
 							artifact.id = xmlArtifact.id;
 							artifact.version = new Version(xmlArtifact.version);
-							artifact.md5 = getProperties(artifactNode, "properties/property").get("download.md5");
+							artifact.md5 = artifactProperties.get("download.md5");
+							String download_size = artifactProperties.getOrDefault("download.size", "-1L");
+							try {
+								artifact.download_size = Long.parseLong(download_size);
+							} catch (NumberFormatException e) {
+								artifact.download_size = -1L;
+							}
 							artifacts.add(artifact);
 							break;
 						}
@@ -140,7 +151,7 @@ class ArtifactRepository extends XML {
 	 * * <artifact classifier='osgi.bundle' id=
 	 * 'org.bndtools.versioncontrol.ignores.plugin.git' version=
 	 * '3.3.0.201605202157'>
-	 * 
+	 *
 	 * @param item
 	 * @return
 	 * @throws Exception

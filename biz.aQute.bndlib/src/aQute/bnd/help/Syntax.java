@@ -364,12 +364,11 @@ public class Syntax implements Constants {
 			+ " instruction tells bnd which bundle classes, if any, to search for OSGI CDI Integration (or plain CDI) annotation.",
 			CDIANNOTATIONS + ": *;discover=all", null, Verifier.WILDCARDNAMEPATTERN,
 
-			new Syntax("discover",
-				"Bean Discovery Mode.", "discover=all", "(all|annotated|annotated_by_bean|none)", null),
+			new Syntax("discover", "Bean Discovery Mode.", "discover=all", "(all|annotated|annotated_by_bean|none)",
+				null),
 
-			new Syntax("noservicecapabilities",
-				"indicates that no service capabilities will be added for matches.", "noservicecapabilities=true",
-				"true, false", Pattern.compile("true|false"))),
+			new Syntax("noservicecapabilities", "indicates that no service capabilities will be added for matches.",
+				"noservicecapabilities=true", "true, false", Pattern.compile("true|false"))),
 
 		new Syntax(CONNECTION_SETTINGS, "Setting up the communications for bnd.",
 			CONNECTION_SETTINGS + "= ~/.bnd/connection-settings.xml", null, null),
@@ -424,8 +423,9 @@ public class Syntax implements Constants {
 			"The " + DEFAULT_PROP_TARGET_DIR + " is used to specify the directory to generate output JAR.",
 			DEFAULT_PROP_TARGET_DIR + ": target", null, null),
 
-		new Syntax(DSANNOTATIONS_OPTIONS, "The " + DSANNOTATIONS_OPTIONS
-			+ " instruction configures how DS component annotations are processed and what metadata is generated.",
+		new Syntax(DSANNOTATIONS_OPTIONS,
+			"The " + DSANNOTATIONS_OPTIONS
+				+ " instruction configures how DS component annotations are processed and what metadata is generated.",
 			DSANNOTATIONS_OPTIONS + ": version;minimum=1.2.0",
 			"(inherit|felixExtensions|extender|nocapabilities|norequirements|version)", null),
 
@@ -436,8 +436,9 @@ public class Syntax implements Constants {
 			+ " instruction tells bnd which bundle classes, if any, to search for Metatype annotations. bnd will then process those classes into Metatype XML descriptors.",
 			METATYPE_ANNOTATIONS + ": *", null, Verifier.FQNPATTERN),
 
-		new Syntax(METATYPE_ANNOTATIONS_OPTIONS, "The " + DSANNOTATIONS_OPTIONS
-			+ " instruction configures how Metatype annotations are processed and what metadata is generated.",
+		new Syntax(METATYPE_ANNOTATIONS_OPTIONS,
+			"The " + DSANNOTATIONS_OPTIONS
+				+ " instruction configures how Metatype annotations are processed and what metadata is generated.",
 			METATYPE_ANNOTATIONS_OPTIONS + ": version;minimum=1.2.0",
 			"(inherit|felixExtensions|extender|nocapabilities|norequirements|version)", null),
 
@@ -466,8 +467,7 @@ public class Syntax implements Constants {
 		new Syntax(FIXUPMESSAGES,
 			"Rearrange and/or replace errors and warnings. Errors that should be ignore or be warnings (and vice versa for warnings) can be moved or rewritten by specifying a globbing pattern for the message.",
 			FIXUPMESSAGES + "='Version mismatch';replace:='************* ${@}';restrict:=error", null, null),
-		new Syntax(GESTALT,
-			"provides access to the gestalt properties that describe the environment",
+		new Syntax(GESTALT, "provides access to the gestalt properties that describe the environment",
 			GESTALT + "=interactive",
 			"(" + GESTALT_INTERACTIVE + "|" + GESTALT_BATCH + "|" + GESTALT_CI + "|" + GESTALT_OFFLINE + "|"
 				+ GESTALT_SHELL + ")",
@@ -511,6 +511,9 @@ public class Syntax implements Constants {
 		new Syntax(MAVEN_RELEASE, "Set the Maven release options for the Maven Bnd Repository.",
 			MAVEN_RELEASE + ": local", "(local|remote)", null),
 
+		new Syntax(MAVEN_SCOPE, "Set the default Maven scope for dependencies in the generated POM.",
+			MAVEN_SCOPE + ": compile", "(compile|provided)", null),
+
 		new Syntax(MANIFEST, "Directly include a manifest, do not use the calculated manifest.",
 			MANIFEST + "=META-INF/MANIFEST.MF", null, null),
 
@@ -535,7 +538,9 @@ public class Syntax implements Constants {
 		new Syntax(NOMANIFEST, "Do not safe the manifest in the JAR.", NOMANIFEST + "=true", "true,false",
 			Verifier.TRUEORFALSEPATTERN),
 
-		new Syntax(NOUSES, "Do not calculate the " + USES_DIRECTIVE + " directive on exports.", NOUSES + "=true",
+		new Syntax(NOUSES,
+			"Do not calculate the " + USES_DIRECTIVE + " directive on package exports or on capabilities.",
+			NOUSES + "=true",
 			"true,false", Verifier.TRUEORFALSEPATTERN),
 
 		new Syntax(NOEE, "Do not calculate the osgi.ee name space Execution Environment from the class file version.",
@@ -547,8 +552,7 @@ public class Syntax implements Constants {
 		new Syntax(OUTPUTMASK,
 			"If set, is used a template to calculate the output file. It can use any macro but the ${@bsn} and ${@version} macros refer to the current JAR being saved. The default is bsn + \".jar\".",
 			OUTPUTMASK + "=my_file.zip", null, null),
-		new Syntax(PACKAGEINFOTYPE, "Sets the different types of package info.", PACKAGEINFOTYPE + "=osgi",
-			null, null),
+		new Syntax(PACKAGEINFOTYPE, "Sets the different types of package info.", PACKAGEINFOTYPE + "=osgi", null, null),
 		new Syntax(PEDANTIC, "Warn about things that are not really wrong but still not right.", PEDANTIC + "=true",
 			"true,false", Verifier.TRUEORFALSEPATTERN),
 
@@ -583,7 +587,7 @@ public class Syntax implements Constants {
 			"-resolve.preferences=com.example.bundle.most.priority", "${packages}", null),
 
 		new Syntax(RUNTIMEOUT, "Specifies the test execution timeout.", RUNTIMEOUT + "=10000", null, null),
-		new Syntax(REQUIRE_BND, "Require a specific version of bnd.", REQUIRE_BND + "=4.1",
+		new Syntax(REQUIRE_BND, "Require a specific version of bnd.", REQUIRE_BND + "=\"(version>=4.1)\"",
 			"(FILTER ( ',' FILTER )* )?", null),
 
 		new Syntax(RESOURCEONLY,
@@ -679,9 +683,8 @@ public class Syntax implements Constants {
 		new Syntax(STANDALONE,
 			"Used in bndrun files. Disconnects the bndrun file from the workspace and defines its own Capabilities repositories.",
 			STANDALONE + "=index.html;name=..., ...", null, null),
-		new Syntax(STRICT,
-			"If set to true, then extra verification is done.",
-			STRICT + "=true", "true,false", Verifier.TRUEORFALSEPATTERN),
+		new Syntax(STRICT, "If set to true, then extra verification is done.", STRICT + "=true", "true,false",
+			Verifier.TRUEORFALSEPATTERN),
 		new Syntax(SYSTEMPROPERTIES, "Properties that are set as system properties.",
 			SYSTEMPROPERTIES + "= foo=3, bar=4", null, null),
 		new Syntax(TESTCONTINUOUS,
@@ -793,10 +796,8 @@ public class Syntax implements Constants {
 				assert optionalType instanceof Class : "Generic types in optional not supported";
 				rtype = (Class<?>) optionalType;
 			}
-			if (rtype
-				.isEnum()) {
-				Object[] enumConstants = rtype
-					.getEnumConstants();
+			if (rtype.isEnum()) {
+				Object[] enumConstants = rtype.getEnumConstants();
 				values = Strings.join(enumConstants);
 			} else if (Boolean.class.isAssignableFrom(rtype)) {
 				values = "true,false";
@@ -818,8 +819,7 @@ public class Syntax implements Constants {
 			} else if (Iterable.class.isAssignableFrom(rtype)) {
 				// list
 				syntaxes.add(new Syntax(name, lead, example, values, pattern));
-			} else if (rtype
-				.isInterface()) {
+			} else if (rtype.isInterface()) {
 				// properties
 				Syntax[] clauses = create(rtype, Syntax::toProperty, false);
 				syntaxes.add(new Syntax(name, lead, example, values, pattern, clauses));
@@ -894,6 +894,7 @@ public class Syntax implements Constants {
 		return header;
 	}
 
+	@Override
 	public String toString() {
 		return header;
 	}
